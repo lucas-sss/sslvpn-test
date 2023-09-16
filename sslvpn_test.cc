@@ -486,11 +486,20 @@ void init_tun()
 
 int main(int argc, char **argv)
 {
+    int port = 1443;
     signal(SIGINT, handleInterrupt);
     init_tun();
     initSSL();
     epollfd = epoll_create1(EPOLL_CLOEXEC);
-    listenfd = createServer(1443);
+
+    if (argc > 2)
+    {
+        port = atoi(argv[1]);
+        if (port <= 0 || port > 65535)
+            port = 1443;
+    }
+
+    listenfd = createServer(port);
     Channel *li = new Channel(listenfd, EPOLLIN | EPOLLET);
     addEpollFd(epollfd, li);
     while (!g_stop)
