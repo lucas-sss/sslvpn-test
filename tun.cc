@@ -30,8 +30,8 @@ extern "C"
         char buf[512] = {0};
         char mtuStr[16] = {0};
 
-        printf("tun config -> dev: %s, mtu: %d, ipv4: %s, ipv6: %s\n", tunCfg->dev,
-               tunCfg->mtu, tunCfg->ipv4, tunCfg->ipv6);
+        printf("tun config -> dev: %s, mtu: %d, ipv4: %s, ipv4_net: %s, ipv6: %s\n", tunCfg->dev,
+               tunCfg->mtu, tunCfg->ipv4, tunCfg->ipv4_net, tunCfg->ipv6);
 
         // 设置mtu
         memset(buf, 0, sizeof(buf));
@@ -43,6 +43,7 @@ extern "C"
         {
             memset(buf, 0, sizeof(buf));
             sprintf(buf, "ip addr add %s dev %s", tunCfg->ipv4, tunCfg->dev);
+            printf("shell run: %s\n", buf);
             system(buf);
         }
 
@@ -51,30 +52,30 @@ extern "C"
         {
             memset(buf, 0, sizeof(buf));
             sprintf(buf, "ip -6 addr add %s dev %s", tunCfg->ipv6, tunCfg->dev);
+            printf("shell run: %s\n", buf);
             system(buf);
         }
 
         // 启动网卡
         memset(buf, 0, sizeof(buf));
         sprintf(buf, "ip link set dev %s up", tunCfg->dev);
+        printf("shell run: %s\n", buf);
         system(buf);
 
         // 设置路由
         memset(buf, 0, sizeof(buf));
         sprintf(buf, "route add -net %s dev %s", tunCfg->ipv4_net, tunCfg->dev);
+        printf("shell run: %s\n", buf);
         system(buf);
 
         return 0;
     }
 
-    int tun_create(char *dev, char *ipv4, char *ipv4_net)
+    int tun_create(TUNCONFIG_T *tunCfg)
     {
         int flags = IFF_TUN | IFF_NO_PI;
         struct ifreq ifr;
         int fd, err;
-        TUNCONFIG_T tunCfg = {0};
-
-        assert(dev != NULL);
 
         if ((fd = open("/dev/net/tun", O_RDWR)) < 0) //| O_NONBLOCK
         {
@@ -84,9 +85,9 @@ extern "C"
 
         memset(&ifr, 0, sizeof(struct ifreq));
         ifr.ifr_flags |= flags;
-        if (*dev != '\0')
+        if (*tunCfg->dev != '\0')
         {
-            strcpy(ifr.ifr_name, dev);
+            strcpy(ifr.ifr_name, tunCfg->dev);
         }
         if ((err = ioctl(fd, TUNSETIFF, &ifr)) < 0)
         {
@@ -94,17 +95,15 @@ extern "C"
             close(fd);
             return err;
         }
-        if (*dev == '\0')
+        printf("create tun %s\n", ifr.ifr_name);
+
+        // 回显设置dev
+        if (*tunCfg->dev == '\0')
         {
-            strcpy(dev, ifr.ifr_name);
+            strcpy(tunCfg->dev, ifr.ifr_name);
         }
 
-        memset(&tunCfg, 0, sizeof(TUNCONFIG_T));
-        tunCfg.mtu = 1500;
-        memcpy(tunCfg.dev, dev, strlen(dev));
-        memcpy(tunCfg.ipv4, ipv4, strlen(ipv4));
-        memcpy(tunCfg.ipv4_net, ipv4_net, strlen(ipv4_net));
-        err = config_tun(&tunCfg);
+        err = config_tun(tunCfg);
         if (err != 0)
         {
             printf("config tun fail");

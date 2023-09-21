@@ -22,8 +22,8 @@
 
 #include "tun.h"
 #include "protocol.h"
-
-#define MAX_BUF_LEN 20480
+#include "cJSON.h"
+#include "print.h"
 
 using namespace std;
 
@@ -48,6 +48,35 @@ using namespace std;
             exit(1);          \
     } while (0)
 
+static const int MAX_BUF_LEN = 20480;
+static const int MTU = 1500;
+static const bool GLOBAL_MODE = false;
+
+typedef struct
+{
+    bool used;
+    char vip[64];
+} VIP_CONFIG_T;
+
+typedef struct
+{
+    char ipv4_net[64];
+    int netIP;        // 网络地址
+    int broadcastIp;  // 广播地址
+    int ipCount;      // ip数量
+    int sVip;         // 服务端虚拟ip
+    int vipPoolStart; // ip池开始地址
+    int vipPoolEnd;   // ip池结束地址
+    int vipPoolCap;   // ip池容量
+} vip_pool;
+
+map<string, SSL *> maps;
+map<string, VIP_CONFIG_T *> vipConfMap;
+
+static vip_pool vipPool;
+
+int vipCycleIndex = 0;
+
 BIO *errBio;
 SSL_CTX *g_sslCtx;
 
@@ -56,8 +85,6 @@ int epollfd, listenfd;
 // 虚拟网卡设备fd
 int tunfd;
 
-map<string, SSL *> maps;
-
 struct Channel
 {
     int fd_;
@@ -65,7 +92,7 @@ struct Channel
     bool tcpConnected_;
     bool sslConnected_;
     int events_;
-    string vip_;
+    char vip_[64];
 
     unsigned char buf[4096 + 8];
     unsigned char *next;
@@ -78,6 +105,7 @@ struct Channel
         events_ = events;
         next = NULL;
         next_len = 0;
+        memset(vip_, 0, sizeof(vip_));
     }
     void update()
     {
@@ -89,26 +117,32 @@ struct Channel
         int r = epoll_ctl(epollfd, EPOLL_CTL_MOD, fd_, &ev);
         check0(r, "epoll_ctl mod failed %d %s", errno, strerror(errno));
     }
-    void setVip(string vip)
+    void setVip(char *vip)
     {
-        vip_ = vip;
+        memcpy(vip_, vip, strlen(vip));
     }
     ~Channel()
     {
-        // log("deleting fd %d\n", fd_);
+        log("deleting fd %d\n", fd_);
         epoll_ctl(epollfd, EPOLL_CTL_DEL, fd_, NULL);
         close(fd_);
         if (ssl_)
         {
+            log("release ssl: %p\n", ssl_);
             SSL_shutdown(ssl_);
             SSL_free(ssl_);
         }
-        if (!vip_.empty())
+        if (strlen(vip_) > 0)
         {
+            printf("释放虚拟vip: %s\n", vip_);
+            vipConfMap.erase(vip_);
+            printf("移除SSL记录: %p\n", ssl_);
             maps.erase(vip_);
         }
     }
 };
+
+int pushTunConf(Channel *ch);
 
 int setNonBlock(int fd, bool value)
 {
@@ -218,7 +252,8 @@ void handleHandshake(Channel *ch)
     {
         ch->sslConnected_ = true;
         // log("ssl connected fd %d\n", ch->fd_);
-        maps.insert(pair<string, SSL *>("10.12.9.2", ch->ssl_));
+        // 推送tun配置，实际应在登录验证成功之后再推送
+        pushTunConf(ch);
         return;
     }
     int err = SSL_get_error(ch->ssl_, r);
@@ -419,8 +454,6 @@ void *server_tun_thread(void *arg)
     unsigned char packet[MAX_BUF_LEN + HEADER_LEN];
     unsigned int enpack_len = 0;
 
-    log("server_tun_thread -> tunfd: %d\n", tunfd);
-
     // 2、读取虚拟网卡数据
     while (1)
     {
@@ -466,15 +499,101 @@ void *server_tun_thread(void *arg)
     return NULL;
 }
 
-void init_tun()
+char *pIp(int ip_addr)
+{
+    struct in_addr var_ip;
+
+    var_ip.s_addr = htonl(ip_addr);
+    return inet_ntoa(var_ip);
+}
+
+int parseVipPool(const char *netIp, const char *netMask, vip_pool *vp)
+{
+    unsigned long ip, mask, mask2;
+
+    if (netIp == NULL || netMask == NULL || vp == NULL)
+    {
+        return -1;
+    }
+
+    ip = inet_addr(netIp);
+    mask = inet_addr(netMask);
+    mask2 = inet_addr("255.255.255.255");
+
+    if (ip == INADDR_NONE || mask == INADDR_NONE)
+    {
+        printf("parse ip and mask error");
+        return -1;
+    }
+
+    vp->netIP = ntohl(ip & mask);
+    vp->ipCount = ntohl(mask2 - mask);
+    vp->broadcastIp = vp->netIP + vp->ipCount;
+
+    vp->sVip = vp->netIP + 1;
+    vp->vipPoolStart = vp->sVip + 1;
+    vp->vipPoolEnd = vp->broadcastIp - 1;
+    vp->vipPoolCap = vp->vipPoolEnd - vp->vipPoolStart + 1;
+
+    printf("net ip: %s,\n", pIp(vp->netIP));
+    printf("broadcast ip: %s,\n", pIp(vp->broadcastIp));
+    printf("svip: %s,\n", pIp(vp->sVip));
+    printf("vip pool start: %s\n", pIp(vp->vipPoolStart));
+    printf("vip pool end: %s\n", pIp(vp->vipPoolEnd));
+    printf("vip pool size: %d\n", vp->vipPoolCap);
+    printf("\n");
+    return 0;
+}
+
+int netmask2prefixlen(const char *ip_str)
 {
     int ret = 0;
-    char dev[32] = {0};
-    char *ipv4 = "10.12.9.1";
-    char *ipv4_net = "10.12.9.0/24";
+    unsigned int ip_num = 0;
+    unsigned char c1, c2, c3, c4;
+    int cnt = 0;
 
-    memset(dev, 0, sizeof(dev));
-    tunfd = tun_create(dev, ipv4, ipv4_net);
+    ret = sscanf(ip_str, "%hhu.%hhu.%hhu.%hhu", &c1, &c2, &c3, &c4);
+    ip_num = c1 << 24 | c2 << 16 | c3 << 8 | c4;
+    if (ip_num == 0xffffffff)
+        return 32;
+    if (ip_num == 0xffffff00)
+        return 24;
+    if (ip_num == 0xffff0000)
+        return 16;
+    if (ip_num == 0xff000000)
+        return 6;
+    for (int i = 0; i < 32; i++)
+    {
+        if ((ip_num << i) & 0x80000000)
+            cnt++;
+        else
+            break;
+    }
+    return cnt;
+}
+
+void init_tun(unsigned int mtu, const char *ipv4, const char *netmask)
+{
+    int ret = 0;
+    TUNCONFIG_T tunCfg = {0};
+    struct in_addr var_ip;
+
+    // 解析虚拟ip池
+    memset(&vipPool, 0, sizeof(vip_pool));
+    ret = parseVipPool(ipv4, netmask, &vipPool);
+    check0(ret != 0, "parse vip pool fail: %d", ret);
+
+    sprintf(vipPool.ipv4_net, "%s/%d", ipv4, netmask2prefixlen(netmask));
+    var_ip.s_addr = htonl(vipPool.sVip);
+
+    memset(&tunCfg, 0, sizeof(TUNCONFIG_T));
+    tunCfg.mtu = mtu;
+    strcpy(tunCfg.ipv4, inet_ntoa(var_ip));
+    strcpy(tunCfg.ipv4_net, vipPool.ipv4_net);
+
+    // 创建虚拟网卡
+    tunfd = tun_create(&tunCfg);
+
     check0(tunfd <= 0, "create tun fd fail: %d", tunfd);
     log("create tun fd: %d\n", tunfd);
 
@@ -484,11 +603,128 @@ void init_tun()
     check0(ret != 0, "create server tun thread fail: %d", ret);
 }
 
+/**
+ * @brief
+ *
+ * @param ip
+ * @param ipLen
+ * @return int 1 success
+ */
+int allocateVip(char *ip, unsigned int *ipLen)
+{
+    int i;
+    int index = vipCycleIndex;
+    char vip[64] = {0};
+
+    while (vipCycleIndex < vipPool.vipPoolCap)
+    {
+        if (vipCycleIndex == index - 1)
+        {
+            return 0;
+        }
+        if (vipCycleIndex == vipPool.vipPoolCap - 1)
+        {
+            vipCycleIndex = 0;
+            continue;
+        }
+
+        memset(vip, 0, sizeof(vip));
+        strcpy(vip, pIp(vipPool.vipPoolStart + vipCycleIndex));
+
+        map<string, VIP_CONFIG_T *>::iterator iter = vipConfMap.find(vip);
+        if (iter == vipConfMap.end())
+        {
+            VIP_CONFIG_T *tmp = (VIP_CONFIG_T *)malloc(sizeof(VIP_CONFIG_T));
+            if (tmp == NULL)
+            {
+                return -1;
+            }
+            memset(tmp, 0, sizeof(VIP_CONFIG_T));
+
+            memcpy(ip, vip, strlen(vip));
+            *ipLen = strlen(vip);
+
+            memcpy(tmp, vip, strlen(vip));
+            tmp->used = true;
+            vipConfMap.insert(pair<string, VIP_CONFIG_T *>(vip, tmp));
+            return 1;
+        }
+        VIP_CONFIG_T *vipConf = iter->second;
+        if (!vipConf->used)
+        {
+            vipConf->used = true;
+            memcpy(ip, vip, strlen(vip));
+            *ipLen = strlen(vip);
+            return 1;
+        }
+        vipCycleIndex++;
+    }
+}
+
+int pushTunConf(Channel *ch)
+{
+    int ret, writeLen = 0;
+    char vip[128] = {0};
+    unsigned char conf[512] = {0};
+    unsigned char packet[514] = {0};
+    unsigned int vipLen = sizeof(vip);
+    unsigned int enpackLen = sizeof(packet);
+    cJSON *root = NULL;
+    SSL *ssl = ch->ssl_;
+
+    // 分配虚拟ip
+    memset(vip, 0, sizeof(vip));
+    ret = allocateVip(vip, &vipLen);
+    if (ret != 1)
+    {
+        log("allocate vip fail\n");
+        return -1;
+    }
+    *(vip + vipLen) = '\0';
+    ch->setVip(vip);
+
+    // 记录分配的虚拟ip与ssl对应关系
+    maps.insert(pair<string, SSL *>(vip, ssl));
+
+    // 创建配置json
+    root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "global", GLOBAL_MODE);
+    cJSON_AddNumberToObject(root, "mtu", MTU);
+    cJSON_AddStringToObject(root, "svip", pIp(vipPool.sVip));
+    cJSON_AddStringToObject(root, "cvip", vip);
+    cJSON_AddStringToObject(root, "cidr", vipPool.ipv4_net);
+    char *str = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    printf("push tun config to client[%p] -> %s\n", ssl, str);
+
+    // 封装数据
+    memset(conf, 0, sizeof(conf));
+    memcpy(conf, RECORD_TYPE_CONTROL_TUN_CONFIG, RECORD_TYPE_LABEL_LEN);
+    memcpy(conf + RECORD_TYPE_LABEL_LEN, str, strlen(str));
+
+    enpack(RECORD_TYPE_CONTROL, conf, strlen(str) + RECORD_TYPE_LABEL_LEN, packet, &enpackLen);
+    // dump_hex(packet + 2, enpackLen - 2, 16);
+
+    // 推送数据 TODO 发送数据不全需要处理
+    writeLen = SSL_write(ssl, packet, enpackLen);
+    if (writeLen <= 0)
+    {
+        log("网卡配置[%s]推送失败! 错误码: %d, 错误信息: '%s'\n", conf, errno, strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     int port = 1443;
+    const char *ip = "10.12.9.0";
+    const char *mask = "255.255.255.0";
+
     signal(SIGINT, handleInterrupt);
-    init_tun();
+
+    init_tun(MTU, ip, mask);
+
     initSSL();
     epollfd = epoll_create1(EPOLL_CLOEXEC);
 

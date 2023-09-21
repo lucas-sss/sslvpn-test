@@ -2,7 +2,7 @@
  * @Author: lw liuwei@flksec.com
  * @Date: 2023-09-12 22:34:17
  * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2023-09-12 23:46:55
+ * @LastEditTime: 2023-09-20 23:12:52
  * @FilePath: \openssl-example\tun.h
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -22,13 +22,14 @@ extern "C"
 {
 #endif
 
-    typedef struct tunconfig_t
+    typedef struct
     {
         char dev[MAX_TUN_DEV_NAME_LEN];          // 虚拟设备名称
         char ipv4[MAX_IPV4_STR_LEN + 1];         // ipv4地址    10.9.0.1
         char ipv4_net[MAX_IPV4_NET_STR_LEN + 1]; // ipv4网络地址 10.9.0.0/24
         char ipv6[MAX_IPV6_STR_LEN + 1];         // ipv6地址
-        int mtu;                                 // 虚拟设备mtu值
+        unsigned int mtu;                        // 虚拟设备mtu值
+        int global;                              // 是否是全局模式
     } TUNCONFIG_T;
 
     /**
@@ -38,7 +39,7 @@ extern "C"
      * @param ipv4_net
      * @return
      */
-    int tun_create(char *dev, char *ipv4, char *ipv4_net);
+    int tun_create(TUNCONFIG_T *tunCfg);
 
 #ifdef __cplusplus
 }

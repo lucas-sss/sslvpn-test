@@ -13,8 +13,11 @@ include_directories("/opt/tongsuo/include")
 link_directories("/opt/tongsuo/lib64")
 
 
-add_executable(sslvpn-test sslvpn_test.cc tun.cc protocol.cc)
-target_link_libraries(sslvpn-test ssl crypto pthread)
+add_executable(sslvpn sslvpn.cc tun.cc protocol.cc cJSON.cc print.cc)
+target_link_libraries(sslvpn ssl crypto pthread)
+
+add_executable(sslvpn-client sslvpn-client.cc tun.cc protocol.cc cJSON.cc print.cc)
+target_link_libraries(sslvpn-client ssl crypto pthread)
 
 # 拷贝文件夹到指定的目录
 add_custom_target(copy_certs ALL  

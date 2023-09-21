@@ -2,7 +2,7 @@
  * @Author: lw liuwei@flksec.com
  * @Date: 2023-09-06 14:21:55
  * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2023-09-16 14:32:02
+ * @LastEditTime: 2023-09-21 01:19:53
  * @FilePath: \SSL-TEST\protocol.c
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -20,11 +20,13 @@ extern "C"
     const unsigned int HEADER_LEN = VPN_LABEL_LEN + RECORD_TYPE_LABEL_LEN + RECORD_LENGTH_LABEL_LEN;
     const unsigned int RECORD_HEADER_LEN = RECORD_TYPE_LABEL_LEN + RECORD_LENGTH_LABEL_LEN;
 
-    const unsigned char VPN_LABEL[VPN_LABEL_LEN] = {0x10, 0x11}; // vpn数据标记
-    const unsigned char RECORD_TYPE_DATA[RECORD_TYPE_LABEL_LEN] = {0x11, 0x11};
-    const unsigned char RECORD_TYPE_CONTROL[RECORD_TYPE_LABEL_LEN] = {0x12, 0x11};
-    const unsigned char RECORD_TYPE_AUTH[RECORD_TYPE_LABEL_LEN] = {0x12, 0x12};
-    const unsigned char RECORD_TYPE_ALARM[RECORD_TYPE_LABEL_LEN] = {0x12, 0x13};
+    const unsigned char VPN_LABEL[VPN_LABEL_LEN] = {0x10, 0x10}; // vpn数据标记
+    const unsigned char RECORD_TYPE_DATA[RECORD_TYPE_LABEL_LEN] = {0x11, 0x10};
+    const unsigned char RECORD_TYPE_CONTROL[RECORD_TYPE_LABEL_LEN] = {0x12, 0x10};
+    const unsigned char RECORD_TYPE_CONTROL_TUN_CONFIG[RECORD_TYPE_LABEL_LEN] = {0x12, 0x11};
+    const unsigned char RECORD_TYPE_CONTROL_ROUTE_CONFIG[RECORD_TYPE_LABEL_LEN] = {0x12, 0x12};
+    const unsigned char RECORD_TYPE_AUTH[RECORD_TYPE_LABEL_LEN] = {0x13, 0x10};
+    const unsigned char RECORD_TYPE_ALARM[RECORD_TYPE_LABEL_LEN] = {0x14, 0x10};
 
     int enpack(const unsigned char type[RECORD_TYPE_LABEL_LEN], unsigned char *in, unsigned int in_len, unsigned char *out, unsigned int *out_len)
     {
