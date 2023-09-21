@@ -38,9 +38,9 @@ void ShowCerts(SSL *ssl)
     cert = SSL_get_peer_certificate(ssl);
     if (cert != NULL)
     {
-        printf("数字证书信息:\n");
+        printf("服务端证书信息:\n");
         line = X509_NAME_oneline(X509_get_subject_name(cert), 0, 0);
-        printf("证书: %s\n", line);
+        printf("使用者: %s\n", line);
         free(line);
         line = X509_NAME_oneline(X509_get_issuer_name(cert), 0, 0);
         printf("颁发者: %s\n", line);
@@ -71,10 +71,10 @@ int main(int argc, char **argv)
     // 变量定义
     const SSL_METHOD *meth = NULL;
     SSL_CTX *ctx = NULL;
-    const char *sign_key_file = "certs/signkey.key";
-    const char *sign_cert_file = "certs/signcert.crt";
-    const char *enc_key_file = "certs/enckey.key";
-    const char *enc_cert_file = "certs/enccert.crt";
+    const char *sign_key_file = "certs/signclient.key";
+    const char *sign_cert_file = "certs/signclient.crt";
+    const char *enc_key_file = "certs/encclient.key";
+    const char *enc_cert_file = "certs/encclient.crt";
 
     // 双证书相关client的各种定义
     meth = NTLS_client_method();
@@ -85,8 +85,10 @@ int main(int argc, char **argv)
 
     // 设置算法套件为ECC-SM2-WITH-SM4-SM3或者ECDHE-SM2-WITH-SM4-SM3
     // 这一步并不强制编写，默认ECC-SM2-WITH-SM4-SM3优先
-    if (SSL_CTX_set_cipher_list(ctx, "ECC-SM2-WITH-SM4-SM3") <= 0)
+    // if (SSL_CTX_set_cipher_list(ctx, "ECC-SM2-WITH-SM4-SM3") <= 0)
+    if (SSL_CTX_set_cipher_list(ctx, "ECDHE-SM2-WITH-SM4-SM3") <= 0)
     {
+        printf("SSL_CTX_set_cipher_list fail\n");
         goto err;
     }
 

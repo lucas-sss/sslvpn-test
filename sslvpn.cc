@@ -134,9 +134,9 @@ struct Channel
         }
         if (strlen(vip_) > 0)
         {
-            printf("释放虚拟vip: %s\n", vip_);
+            printf("释放vip: %s\n", vip_);
             vipConfMap.erase(vip_);
-            printf("移除SSL记录: %p\n", ssl_);
+            printf("移除SSL维护记录: %p\n", ssl_);
             maps.erase(vip_);
         }
     }
@@ -374,8 +374,32 @@ void handleWrite(Channel *ch)
     ch->update();
 }
 
+static int verify_callback(int preverify_ok, X509_STORE_CTX *x509_ctx)
+{
+    SSL *ssl;
+    X509 *cert;
+    char *line;
+    log("verify_callback -> preverify_ok: %d\n", preverify_ok);
+
+    cert = X509_STORE_CTX_get_current_cert(x509_ctx);
+    if (cert != NULL)
+    {
+        printf("client cert:\n");
+        line = X509_NAME_oneline(X509_get_subject_name(cert), 0, 0);
+        printf("使用者: %s\n", line);
+        free(line);
+        line = X509_NAME_oneline(X509_get_issuer_name(cert), 0, 0);
+        printf("颁发者: %s\n", line);
+        free(line);
+        X509_free(cert);
+    }
+
+    return preverify_ok;
+}
+
 void initSSL()
 {
+    string ca = "certs/ca.crt", cert = "certs/server.pem", key = "certs/server.pem", signcert = "certs/signcert.crt", singkey = "certs/signkey.key", enccert = "certs/enccert.crt", enckey = "certs/enckey.key";
     SSL_load_error_strings();
     int r = SSL_library_init();
     check0(!r, "SSL_library_init failed");
@@ -388,11 +412,14 @@ void initSSL()
     check0(g_sslCtx == NULL, "SSL_CTX_new failed");
     SSL_CTX_set_cipher_list(g_sslCtx, "ECC-SM2-SM4-CBC-SM3:ECDHE-SM2-WITH-SM4-SM3:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA:AES128-GCM-SHA256:AES128-SHA256:AES128-SHA:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES256-SHA:AES256-GCM-SHA384:AES256-SHA256:AES256-SHA:ECDHE-RSA-AES128-SHA256:!aNULL:!eNULL:!RC4:!EXPORT:!DES:!3DES:!MD5:!DSS:!PKS");
     SSL_CTX_set_options(g_sslCtx, SSL_OP_CIPHER_SERVER_PREFERENCE);
-    SSL_CTX_set_verify(g_sslCtx, SSL_VERIFY_NONE, NULL); // 不验证客户端；
+
+    // SSL_CTX_set_verify(g_sslCtx, SSL_VERIFY_NONE, NULL); // 不验证客户端；
+    SSL_CTX_set_verify(g_sslCtx, SSL_VERIFY_PEER, verify_callback); // 验证客户端；
+    r = SSL_CTX_load_verify_locations(g_sslCtx, ca.c_str(), NULL);
+    check0(r <= 0, "SSL_CTX_load_verify_locations %s failed", ca.c_str());
     // 允许使用国密双证书功能
     SSL_CTX_enable_ntls(g_sslCtx);
 
-    string cert = "certs/server.pem", key = "certs/server.pem", signcert = "certs/signcert.crt", singkey = "certs/signkey.key", enccert = "certs/enccert.crt", enckey = "certs/enckey.key";
     // 加载sm2证书
     r = SSL_CTX_use_sign_PrivateKey_file(g_sslCtx, singkey.c_str(), SSL_FILETYPE_PEM);
     check0(r <= 0, "SSL_CTX_use_sign_PrivateKey_file %s failed", singkey.c_str());
