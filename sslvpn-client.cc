@@ -58,6 +58,8 @@ int tun_fd;
 
 int main(int argc, char **argv)
 {
+    bool useTLS13 = false;
+    bool useDHE = false;
     int sockfd, len;
     int ret;
     struct sockaddr_in dest;
@@ -83,35 +85,51 @@ int main(int argc, char **argv)
     // 允许使用国密双证书功能
     SSL_CTX_enable_ntls(ctx);
 
-    // 设置算法套件为ECC-SM2-WITH-SM4-SM3或者ECDHE-SM2-WITH-SM4-SM3
-    // 这一步并不强制编写，默认ECC-SM2-WITH-SM4-SM3优先
-    // if (SSL_CTX_set_cipher_list(ctx, "ECC-SM2-WITH-SM4-SM3") <= 0)
-    if (SSL_CTX_set_cipher_list(ctx, "ECDHE-SM2-WITH-SM4-SM3") <= 0)
+    if (useTLS13)
+    {
+        // 对于tls1.3: 设置算法套件为TLS_SM4_GCM_SM3/TLS_SM4_CCM_SM3
+        SSL_CTX_set1_curves_list(ctx, "SM2:X25519:prime256v1");
+        ret = SSL_CTX_set_ciphersuites(ctx, "TLS_SM4_GCM_SM3");
+    }
+    else
+    {
+        // 对于tlcp: 设置算法套件为ECC-SM2-WITH-SM4-SM3或者ECDHE-SM2-WITH-SM4-SM3,
+        // 这一步并不强制编写，默认ECC-SM2-WITH-SM4-SM3优先
+        if (useDHE)
+        {
+            ret = SSL_CTX_set_cipher_list(ctx, "ECDHE-SM2-WITH-SM4-SM3");
+            // 加载签名证书，加密证书，仅ECDHE-SM2-WITH-SM4-SM3套件需要这一步,
+            // 该部分流程用...begin...和...end...注明
+            //  ...begin...
+            if (!SSL_CTX_use_sign_PrivateKey_file(ctx, sign_key_file, SSL_FILETYPE_PEM))
+            {
+                goto err;
+            }
+            if (!SSL_CTX_use_sign_certificate_file(ctx, sign_cert_file, SSL_FILETYPE_PEM))
+            {
+                goto err;
+            }
+            if (!SSL_CTX_use_enc_PrivateKey_file(ctx, enc_key_file, SSL_FILETYPE_PEM))
+            {
+                goto err;
+            }
+            if (!SSL_CTX_use_enc_certificate_file(ctx, enc_cert_file, SSL_FILETYPE_PEM))
+            {
+                goto err;
+            }
+            // ...end...
+        }
+        else
+        {
+            ret = SSL_CTX_set_cipher_list(ctx, "ECC-SM2-WITH-SM4-SM3");
+        }
+    }
+
+    if (ret <= 0)
     {
         printf("SSL_CTX_set_cipher_list fail\n");
         goto err;
     }
-
-    // 加载签名证书，加密证书，仅ECDHE-SM2-WITH-SM4-SM3套件需要这一步,
-    // 该部分流程用...begin...和...end...注明
-    //  ...begin...
-    if (!SSL_CTX_use_sign_PrivateKey_file(ctx, sign_key_file, SSL_FILETYPE_PEM))
-    {
-        goto err;
-    }
-    if (!SSL_CTX_use_sign_certificate_file(ctx, sign_cert_file, SSL_FILETYPE_PEM))
-    {
-        goto err;
-    }
-    if (!SSL_CTX_use_enc_PrivateKey_file(ctx, enc_key_file, SSL_FILETYPE_PEM))
-    {
-        goto err;
-    }
-    if (!SSL_CTX_use_enc_certificate_file(ctx, enc_cert_file, SSL_FILETYPE_PEM))
-    {
-        goto err;
-    }
-    // ...end...
 
     /* 创建一个 socket 用于 tcp 通信 */
     if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
@@ -153,7 +171,7 @@ int main(int argc, char **argv)
     }
     else
     {
-        printf("Connected with %s encryption\n", SSL_get_cipher(ssl));
+        printf("密码套件: %s\n", SSL_get_cipher(ssl));
         ShowCerts(ssl);
     }
 
@@ -325,7 +343,6 @@ static int initTun(int global, char *cvip, char *ipv4_net, unsigned int mtu)
         perror("create tun fail");
         goto err;
     }
-    printf("create tun fd: %d\n", tun_fd);
 
     // 创建client tun读取线程
     if (pthread_create(&clientTunThread, NULL, client_tun_thread, NULL) != 0)

@@ -82,6 +82,7 @@ extern "C"
             printf("Tun device fd create error. (%d)\n", fd);
             return fd;
         }
+        printf("create tun fd: %d\n", fd);
 
         memset(&ifr, 0, sizeof(struct ifreq));
         ifr.ifr_flags |= flags;
@@ -95,7 +96,7 @@ extern "C"
             close(fd);
             return err;
         }
-        printf("create tun %s\n", ifr.ifr_name);
+        printf("create tun device: %s\n", ifr.ifr_name);
 
         // 回显设置dev
         if (*tunCfg->dev == '\0')

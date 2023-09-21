@@ -136,7 +136,7 @@ struct Channel
         {
             printf("释放vip: %s\n", vip_);
             vipConfMap.erase(vip_);
-            printf("移除SSL维护记录: %p\n", ssl_);
+            printf("删除SSL记录: %p\n", ssl_);
             maps.erase(vip_);
         }
     }
@@ -184,7 +184,7 @@ int createServer(short port)
     check0(r, "bind to 0.0.0.0:%d failed %d %s", port, errno, strerror(errno));
     r = listen(fd, 20);
     check0(r, "listen failed %d %s", errno, strerror(errno));
-    log("fd %d listening at %d\n", fd, port);
+    log("create server fd[%d] listening at %d\n", fd, port);
     return fd;
 }
 
@@ -251,7 +251,7 @@ void handleHandshake(Channel *ch)
     if (r == 1)
     {
         ch->sslConnected_ = true;
-        // log("ssl connected fd %d\n", ch->fd_);
+        log("new ssl: %p\n", ch->ssl_);
         // 推送tun配置，实际应在登录验证成功之后再推送
         pushTunConf(ch);
         return;
@@ -387,10 +387,10 @@ static int verify_callback(int preverify_ok, X509_STORE_CTX *x509_ctx)
         printf("client cert:\n");
         line = X509_NAME_oneline(X509_get_subject_name(cert), 0, 0);
         printf("使用者: %s\n", line);
-        free(line);
+        OPENSSL_free(line);
         line = X509_NAME_oneline(X509_get_issuer_name(cert), 0, 0);
         printf("颁发者: %s\n", line);
-        free(line);
+        OPENSSL_free(line);
         X509_free(cert);
     }
 
@@ -399,26 +399,69 @@ static int verify_callback(int preverify_ok, X509_STORE_CTX *x509_ctx)
 
 void initSSL()
 {
-    string ca = "certs/ca.crt", cert = "certs/server.pem", key = "certs/server.pem", signcert = "certs/signcert.crt", singkey = "certs/signkey.key", enccert = "certs/enccert.crt", enckey = "certs/enckey.key";
+    int r;
+    bool verifyClient = true;
+    bool useTLS13 = false;
+    string ca = "certs/ca.crt", signcert = "certs/signcert.crt", singkey = "certs/signkey.key", enccert = "certs/enccert.crt", enckey = "certs/enckey.key";
+    string cert = "certs/server.pem", key = "certs/server.pem", crl = "";
     SSL_load_error_strings();
-    int r = SSL_library_init();
+    r = SSL_library_init();
     check0(!r, "SSL_library_init failed");
     errBio = BIO_new_fd(2, BIO_NOCLOSE);
 
+    // 使用SSLv23_method可以同时支持客户同时支持rsa证书和sm2证书，支持普通浏览器和国密浏览器的访问
+    g_sslCtx = SSL_CTX_new(SSLv23_method());
     // 双证书相关server的各种定义
-    const SSL_METHOD *meth = NTLS_server_method();
-    g_sslCtx = SSL_CTX_new(meth);
-    // g_sslCtx = SSL_CTX_new(SSLv23_method());
+    // const SSL_METHOD *meth = NTLS_server_method();
+    // g_sslCtx = SSL_CTX_new(meth);
     check0(g_sslCtx == NULL, "SSL_CTX_new failed");
+
+    // 允许使用国密双证书功能
+    SSL_CTX_enable_ntls(g_sslCtx);
+
+    if (useTLS13)
+    {
+        printf("enable tls13 sm2 sign");
+        // tongsuo中tls1.3不强制签名使用sm2签名，使用开关控制，对应客户端指定密码套件SSL_CTX_set_ciphersuites(ctx, "TLS_SM4_GCM_SM3");
+        SSL_CTX_enable_sm_tls13_strict(g_sslCtx);
+        SSL_CTX_set1_curves_list(g_sslCtx, "SM2:X25519:prime256v1");
+    }
+
+    // 设置密码套件
     SSL_CTX_set_cipher_list(g_sslCtx, "ECC-SM2-SM4-CBC-SM3:ECDHE-SM2-WITH-SM4-SM3:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA:AES128-GCM-SHA256:AES128-SHA256:AES128-SHA:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES256-SHA:AES256-GCM-SHA384:AES256-SHA256:AES256-SHA:ECDHE-RSA-AES128-SHA256:!aNULL:!eNULL:!RC4:!EXPORT:!DES:!3DES:!MD5:!DSS:!PKS");
     SSL_CTX_set_options(g_sslCtx, SSL_OP_CIPHER_SERVER_PREFERENCE);
 
-    // SSL_CTX_set_verify(g_sslCtx, SSL_VERIFY_NONE, NULL); // 不验证客户端；
-    SSL_CTX_set_verify(g_sslCtx, SSL_VERIFY_PEER, verify_callback); // 验证客户端；
-    r = SSL_CTX_load_verify_locations(g_sslCtx, ca.c_str(), NULL);
-    check0(r <= 0, "SSL_CTX_load_verify_locations %s failed", ca.c_str());
-    // 允许使用国密双证书功能
-    SSL_CTX_enable_ntls(g_sslCtx);
+    // 是否校验客户端
+    if (verifyClient)
+    {
+        printf("need verify client\n");
+        SSL_CTX_set_verify(g_sslCtx, SSL_VERIFY_PEER, NULL); // 验证客户端；
+        r = SSL_CTX_load_verify_locations(g_sslCtx, ca.c_str(), NULL);
+        check0(r <= 0, "SSL_CTX_load_verify_locations %s failed", ca.c_str());
+    }
+    else
+    {
+        printf("not need verify client\n");
+        SSL_CTX_set_verify(g_sslCtx, SSL_VERIFY_NONE, NULL); // 不验证客户端；
+    }
+
+    if (!crl.empty())
+    {
+        X509_STORE *store = NULL;
+        X509_LOOKUP *lookup = NULL;
+
+        store = SSL_CTX_get_cert_store(g_sslCtx);
+        check0(store == NULL, "SSL_CTX_get_cert_store() failed");
+
+        lookup = X509_STORE_add_lookup(store, X509_LOOKUP_file());
+        check0(store == NULL, "X509_STORE_add_lookup() failed");
+
+        r = X509_LOOKUP_load_file(lookup, crl.c_str(), X509_FILETYPE_PEM);
+        check0(store == NULL, "X509_LOOKUP_load_file(\"%s\") failed", crl.c_str());
+
+        X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL);
+        printf("local crl finish\n");
+    }
 
     // 加载sm2证书
     r = SSL_CTX_use_sign_PrivateKey_file(g_sslCtx, singkey.c_str(), SSL_FILETYPE_PEM);
@@ -429,12 +472,14 @@ void initSSL()
     check0(r <= 0, "SSL_CTX_use_enc_PrivateKey_file %s failed", enckey.c_str());
     r = SSL_CTX_use_enc_certificate_file(g_sslCtx, enccert.c_str(), SSL_FILETYPE_PEM);
     check0(r <= 0, "SSL_CTX_use_enc_certificate_file %s failed", enccert.c_str());
+    printf("load sm2 cert key finish\n");
 
     // 加载rsa证书
     r = SSL_CTX_use_certificate_file(g_sslCtx, cert.c_str(), SSL_FILETYPE_PEM);
     check0(r <= 0, "SSL_CTX_use_certificate_file %s failed", cert.c_str());
     r = SSL_CTX_use_PrivateKey_file(g_sslCtx, key.c_str(), SSL_FILETYPE_PEM);
     check0(r <= 0, "SSL_CTX_use_PrivateKey_file %s failed", key.c_str());
+    printf("load rsa cert key finish\n");
 
     r = SSL_CTX_check_private_key(g_sslCtx);
     check0(!r, "SSL_CTX_check_private_key failed");
@@ -562,13 +607,14 @@ int parseVipPool(const char *netIp, const char *netMask, vip_pool *vp)
     vp->vipPoolEnd = vp->broadcastIp - 1;
     vp->vipPoolCap = vp->vipPoolEnd - vp->vipPoolStart + 1;
 
+    printf("<<<<<<<<<<<<< vip net config >>>>>>>>>>>>>\n");
     printf("net ip: %s,\n", pIp(vp->netIP));
     printf("broadcast ip: %s,\n", pIp(vp->broadcastIp));
     printf("svip: %s,\n", pIp(vp->sVip));
     printf("vip pool start: %s\n", pIp(vp->vipPoolStart));
     printf("vip pool end: %s\n", pIp(vp->vipPoolEnd));
     printf("vip pool size: %d\n", vp->vipPoolCap);
-    printf("\n");
+    printf("<<<<<<<<<<<<< vip net config >>>>>>>>>>>>>\n");
     return 0;
 }
 
@@ -599,7 +645,7 @@ int netmask2prefixlen(const char *ip_str)
     return cnt;
 }
 
-void init_tun(unsigned int mtu, const char *ipv4, const char *netmask)
+void initTun(unsigned int mtu, const char *ipv4, const char *netmask)
 {
     int ret = 0;
     TUNCONFIG_T tunCfg = {0};
@@ -620,9 +666,7 @@ void init_tun(unsigned int mtu, const char *ipv4, const char *netmask)
 
     // 创建虚拟网卡
     tunfd = tun_create(&tunCfg);
-
     check0(tunfd <= 0, "create tun fd fail: %d", tunfd);
-    log("create tun fd: %d\n", tunfd);
 
     // 创建server tun读取线程
     pthread_t serverTunThread;
@@ -750,9 +794,10 @@ int main(int argc, char **argv)
 
     signal(SIGINT, handleInterrupt);
 
-    init_tun(MTU, ip, mask);
-
     initSSL();
+
+    initTun(MTU, ip, mask);
+
     epollfd = epoll_create1(EPOLL_CLOEXEC);
 
     if (argc > 2)
