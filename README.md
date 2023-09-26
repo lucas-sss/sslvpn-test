@@ -2,7 +2,7 @@
  * @Author: lw liuwei@flksec.com
  * @Date: 2023-09-16 23:21:36
  * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2023-09-21 23:30:07
+ * @LastEditTime: 2023-09-26 14:08:59
  * @FilePath: \sslvpn-test\README.md
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
 -->
@@ -28,7 +28,17 @@ make
 ./sslvpn [port] #默认端口为1443
 ```
 
-- 客户端
+- linux 客户端
 ```shell
 ./sslvpn-client server_ip server_port
+```
+
+- windows 客户端
+
+功能暂未实现，虚拟网卡读写可参考: [wintun](https://www.wintun.net/)
+
+
+- 移动端
+```text
+无
 ```
