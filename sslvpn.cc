@@ -24,6 +24,7 @@
 #include "protocol.h"
 #include "cJSON.h"
 #include "print.h"
+#include "proxy.h"
 
 using namespace std;
 
@@ -51,6 +52,7 @@ using namespace std;
 static const int MAX_BUF_LEN = 20480;
 static const int MTU = 1500;
 static const bool GLOBAL_MODE = false;
+static const bool OPEN_PROXY = true;
 
 typedef struct
 {
@@ -71,6 +73,7 @@ typedef struct
 } vip_pool;
 
 map<string, SSL *> maps;
+map<int, int> proxyMap; // ssl fd <-> proxy fd
 map<string, VIP_CONFIG_T *> vipConfMap;
 
 static vip_pool vipPool;
@@ -252,6 +255,17 @@ void handleHandshake(Channel *ch)
     {
         ch->sslConnected_ = true;
         log("new ssl: %p\n", ch->ssl_);
+        // 建立和上游的tcp连接
+        if (OPEN_PROXY)
+        {
+            int proxyFd = connect_proxy("127.0.0.1", 9112);
+            if (proxyFd > 0)
+            {
+                int fd = SSL_get_fd(ch->ssl_);
+                proxyMap.insert(pair<int, int>(fd, proxyFd));
+            }
+        }
+
         // 推送tun配置，实际应在登录验证成功之后再推送
         pushTunConf(ch);
         return;
@@ -328,6 +342,24 @@ void handleDataRead(Channel *ch)
         if (ret < 0)
         {
             log("非vpn协议数据\n");
+            if (OPEN_PROXY)
+            {
+                // 打开了代理服务，进行转发
+                map<int, int>::iterator iter = maps.find(SSL_get_fd(ch->ssl_));
+                if (iter == maps.end())
+                {
+                    log("SSL[%p]未查询到代理链接\n", ch->ssl_);
+                    return;
+                }
+                int proxyFd = iter->second;
+                ret = send(proxyFd, ch->next, len, 0);
+                if (ret != len)
+                {
+                    log("SSL[%p]发送代理数据失败, ret: %d\n", ch->ssl_, ret);
+                    return;
+                }
+                ch->next_len = 0;
+            }
         }
         return;
     }

@@ -13,7 +13,7 @@ include_directories("/opt/tongsuo/include")
 link_directories("/opt/tongsuo/lib64")
 
 
-add_executable(sslvpn sslvpn.cc tun.cc protocol.cc cJSON.cc print.cc)
+add_executable(sslvpn sslvpn.cc tun.cc protocol.cc cJSON.cc print.cc proxy.cc)
 target_link_libraries(sslvpn ssl crypto pthread)
 
 add_executable(sslvpn-client sslvpn-client.cc tun.cc protocol.cc cJSON.cc print.cc)
