@@ -97,6 +97,7 @@ int main(int argc, char **argv)
         // 这一步并不强制编写，默认ECC-SM2-WITH-SM4-SM3优先
         if (useDHE)
         {
+            printf("use ECDHE-SM2-WITH-SM4-SM3\n");
             ret = SSL_CTX_set_cipher_list(ctx, "ECDHE-SM2-WITH-SM4-SM3");
             // 加载签名证书，加密证书，仅ECDHE-SM2-WITH-SM4-SM3套件需要这一步,
             // 该部分流程用...begin...和...end...注明
@@ -121,6 +122,7 @@ int main(int argc, char **argv)
         }
         else
         {
+            printf("use ECC-SM2-WITH-SM4-SM3\n");
             ret = SSL_CTX_set_cipher_list(ctx, "ECC-SM2-WITH-SM4-SM3");
         }
     }
@@ -174,6 +176,7 @@ int main(int argc, char **argv)
         printf("密码套件: %s\n", SSL_get_cipher(ssl));
         ShowCerts(ssl);
     }
+    printf("SSL_connect finish\n");
 
     while (1)
     {

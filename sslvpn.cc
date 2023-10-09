@@ -95,13 +95,22 @@ struct Channel
     bool tcpConnected_;
     bool sslConnected_;
     int events_;
-    char vip_[64];
 
     unsigned char buf[4096 + 8];
+
+    /*作为vpn服务端使用*/
+    char vip_[64];
     unsigned char *next;
     unsigned int next_len;
 
-    Channel(int fd, int events)
+    Channel *proxyCh_;
+    /*作为vpn服务端使用*/
+
+    /*作为proxy客户端使用*/
+    bool isproxy_;
+    /*作为proxy客户端使用*/
+
+    Channel(int fd, int events, bool isproxy)
     {
         memset(this, 0, sizeof *this);
         fd_ = fd;
@@ -109,6 +118,8 @@ struct Channel
         next = NULL;
         next_len = 0;
         memset(vip_, 0, sizeof(vip_));
+        isproxy_ = isproxy;
+        proxyCh_ = NULL;
     }
     void update()
     {
@@ -129,7 +140,7 @@ struct Channel
         log("deleting fd %d\n", fd_);
         epoll_ctl(epollfd, EPOLL_CTL_DEL, fd_, NULL);
         close(fd_);
-        if (ssl_)
+        if (ssl_ && !isproxy_) // 代理channel中的ssl复用主服务里的ssl，因此这里需要进行判断，避免重复释放ssl
         {
             log("release ssl: %p\n", ssl_);
             SSL_shutdown(ssl_);
@@ -137,10 +148,18 @@ struct Channel
         }
         if (strlen(vip_) > 0)
         {
-            printf("释放vip: %s\n", vip_);
+            log("释放vip: %s\n", vip_);
             vipConfMap.erase(vip_);
-            printf("删除SSL记录: %p\n", ssl_);
+            log("删除SSL记录: %p\n", ssl_);
             maps.erase(vip_);
+        }
+        if (proxyCh_ != NULL)
+        {
+            log("删除代理Channel\n");
+            epoll_ctl(epollfd, EPOLL_CTL_DEL, proxyCh_->fd_, NULL);
+            close(proxyCh_->fd_);
+            delete proxyCh_;
+            proxyCh_ = NULL;
         }
     }
 };
@@ -169,7 +188,7 @@ void addEpollFd(int epollfd, Channel *ch)
     ev.data.ptr = ch;
     // log("adding fd %d events %d\n", ch->fd_, ev.events);
     int r = epoll_ctl(epollfd, EPOLL_CTL_ADD, ch->fd_, &ev);
-    check0(r, "epoll_ctl add failed %d %s", errno, strerror(errno));
+    check0(r, "epoll_ctl add failed[%d], %s", errno, strerror(errno));
 }
 
 int createServer(short port)
@@ -213,8 +232,31 @@ void handleAccept()
             continue;
         }
         setNonBlock(cfd, 1);
-        Channel *ch = new Channel(cfd, EPOLLIN | EPOLLOUT);
+        Channel *ch = new Channel(cfd, EPOLLIN | EPOLLOUT, false);
         addEpollFd(epollfd, ch);
+    }
+}
+
+void showClientCerts(SSL *ssl)
+{
+    X509 *cert;
+    char *line;
+
+    cert = SSL_get_peer_certificate(ssl);
+    if (cert != NULL)
+    {
+        printf("SSL[%p]客户端证书信息:\n", ssl);
+        line = X509_NAME_oneline(X509_get_subject_name(cert), 0, 0);
+        printf("使用者: %s\n", line);
+        free(line);
+        line = X509_NAME_oneline(X509_get_issuer_name(cert), 0, 0);
+        printf("颁发者: %s\n", line);
+        free(line);
+        X509_free(cert);
+    }
+    else
+    {
+        printf("SSL[%p]无证书信息！\n", ssl);
     }
 }
 
@@ -253,6 +295,7 @@ void handleHandshake(Channel *ch)
     int r = SSL_do_handshake(ch->ssl_);
     if (r == 1)
     {
+        showClientCerts(ch->ssl_);
         ch->sslConnected_ = true;
         log("new ssl: %p\n", ch->ssl_);
         // 建立和上游的tcp连接
@@ -263,11 +306,21 @@ void handleHandshake(Channel *ch)
             {
                 int fd = SSL_get_fd(ch->ssl_);
                 proxyMap.insert(pair<int, int>(fd, proxyFd));
+                // 添加到epoll列表中
+                Channel *proxyCh = new Channel(proxyFd, EPOLLIN | EPOLLET, true);
+                proxyCh->ssl_ = ch->ssl_;
+                addEpollFd(epollfd, proxyCh);
+                ch->proxyCh_ = proxyCh;
+            }
+            else
+            {
+                log("连接代理服务失败: %d\n", proxyFd);
+                // TODO
             }
         }
 
         // 推送tun配置，实际应在登录验证成功之后再推送
-        pushTunConf(ch);
+        // pushTunConf(ch);
         return;
     }
     int err = SSL_get_error(ch->ssl_, r);
@@ -298,7 +351,26 @@ void handleHandshake(Channel *ch)
     }
 }
 
-void handleDataRead(Channel *ch)
+void proxyDataRead(Channel *ch)
+{
+    int readlen = 0;
+
+    readlen = recv(ch->fd_, ch->buf, sizeof(ch->buf), 0);
+    if (readlen > 0)
+    {
+        int writelen = SSL_write(ch->ssl_, ch->buf, readlen);
+        if (writelen < readlen)
+        {
+            log("SSL[%p]写入代理响应数据长度过小 -> proxy resp len: %d, write len: %d\n", ch->ssl_, readlen, writelen);
+        }
+    }
+    else
+    {
+        log("read proxy data fail: %d\n", readlen);
+    }
+}
+
+void SslDataRead(Channel *ch)
 {
     int ret = 0;
     unsigned char packet[4096];
@@ -310,8 +382,6 @@ void handleDataRead(Channel *ch)
         ch->next_len = 0;
     }
     int len = SSL_read(ch->ssl_, ch->next + ch->next_len, 4096 + HEADER_LEN - ch->next_len);
-
-    // int rd = SSL_read(ch->ssl_, buf, sizeof buf);
     int ssle = SSL_get_error(ch->ssl_, len);
     if (len > 0)
     {
@@ -342,16 +412,19 @@ void handleDataRead(Channel *ch)
         if (ret < 0)
         {
             log("非vpn协议数据\n");
+            dump_hex(ch->next, len, 16);
+            log("---------------\n");
             if (OPEN_PROXY)
             {
                 // 打开了代理服务，进行转发
-                map<int, int>::iterator iter = maps.find(SSL_get_fd(ch->ssl_));
-                if (iter == maps.end())
+                map<int, int>::iterator iter = proxyMap.find(SSL_get_fd(ch->ssl_));
+                if (iter == proxyMap.end())
                 {
                     log("SSL[%p]未查询到代理链接\n", ch->ssl_);
                     return;
                 }
                 int proxyFd = iter->second;
+                log("SSL[%p] find proxy fd: %d\n", ch->ssl_, proxyFd);
                 ret = send(proxyFd, ch->next, len, 0);
                 if (ret != len)
                 {
@@ -388,11 +461,18 @@ void handleRead(Channel *ch)
     {
         return handleAccept();
     }
-    if (ch->sslConnected_)
+    if (!ch->isproxy_)
     {
-        return handleDataRead(ch);
+        if (ch->sslConnected_)
+        {
+            return SslDataRead(ch);
+        }
+        handleHandshake(ch);
     }
-    handleHandshake(ch);
+    else
+    {
+        proxyDataRead(ch);
+    }
 }
 
 void handleWrite(Channel *ch)
@@ -416,7 +496,7 @@ static int verify_callback(int preverify_ok, X509_STORE_CTX *x509_ctx)
     cert = X509_STORE_CTX_get_current_cert(x509_ctx);
     if (cert != NULL)
     {
-        printf("client cert:\n");
+        printf("客户端证书:\n");
         line = X509_NAME_oneline(X509_get_subject_name(cert), 0, 0);
         printf("使用者: %s\n", line);
         OPENSSL_free(line);
@@ -432,7 +512,7 @@ static int verify_callback(int preverify_ok, X509_STORE_CTX *x509_ctx)
 void initSSL()
 {
     int r;
-    bool verifyClient = true;
+    bool verifyClient = false;
     bool useTLS13 = false;
     string ca = "certs/ca.crt", signcert = "certs/signcert.crt", singkey = "certs/signkey.key", enccert = "certs/enccert.crt", enckey = "certs/enckey.key";
     string cert = "certs/server.pem", key = "certs/server.pem", crl = "";
@@ -442,10 +522,10 @@ void initSSL()
     errBio = BIO_new_fd(2, BIO_NOCLOSE);
 
     // 使用SSLv23_method可以同时支持客户同时支持rsa证书和sm2证书，支持普通浏览器和国密浏览器的访问
-    g_sslCtx = SSL_CTX_new(SSLv23_method());
+    // g_sslCtx = SSL_CTX_new(SSLv23_method());
     // 双证书相关server的各种定义
-    // const SSL_METHOD *meth = NTLS_server_method();
-    // g_sslCtx = SSL_CTX_new(meth);
+    const SSL_METHOD *meth = NTLS_server_method();
+    g_sslCtx = SSL_CTX_new(meth);
     check0(g_sslCtx == NULL, "SSL_CTX_new failed");
 
     // 允许使用国密双证书功能
@@ -467,9 +547,14 @@ void initSSL()
     if (verifyClient)
     {
         printf("need verify client\n");
-        SSL_CTX_set_verify(g_sslCtx, SSL_VERIFY_PEER, NULL); // 验证客户端；
+        SSL_CTX_set_verify(g_sslCtx, SSL_VERIFY_PEER, verify_callback); // 验证客户端证书回调；
+        // SSL_CTX_set_verify_depth(g_sslCtx, 0);
         r = SSL_CTX_load_verify_locations(g_sslCtx, ca.c_str(), NULL);
         check0(r <= 0, "SSL_CTX_load_verify_locations %s failed", ca.c_str());
+        ERR_clear_error();
+        STACK_OF(X509_NAME) *list = SSL_load_client_CA_file(ca.c_str());
+        check0(list == NULL, "SSL_load_client_CA_file %s failed", ca.c_str());
+        SSL_CTX_set_client_CA_list(g_sslCtx, list);
     }
     else
     {
@@ -840,13 +925,13 @@ int main(int argc, char **argv)
     }
 
     listenfd = createServer(port);
-    Channel *li = new Channel(listenfd, EPOLLIN | EPOLLET);
-    addEpollFd(epollfd, li);
+    Channel *cl = new Channel(listenfd, EPOLLIN | EPOLLET, false);
+    addEpollFd(epollfd, cl);
     while (!g_stop)
     {
         loop_once(epollfd, 100);
     }
-    delete li;
+    delete cl;
     ::close(epollfd);
     BIO_free(errBio);
     SSL_CTX_free(g_sslCtx);
