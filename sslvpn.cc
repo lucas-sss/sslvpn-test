@@ -319,8 +319,6 @@ void handleHandshake(Channel *ch)
             }
         }
 
-        // 推送tun配置，实际应在登录验证成功之后再推送
-        // pushTunConf(ch);
         return;
     }
     int err = SSL_get_error(ch->ssl_, r);
@@ -385,12 +383,6 @@ void SslDataRead(Channel *ch)
     int ssle = SSL_get_error(ch->ssl_, len);
     if (len > 0)
     {
-        // const char *cont = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: Close\r\n\r\n{}";
-        // int len1 = strlen(cont);
-        // int wd = SSL_write(ch->ssl_, cont, len1);
-        // // log("SSL_write %d bytes\n", wd);
-        // delete ch;
-
         // log("ssl read len: %d\n", len);
         int count = 0;
         // 2、解包处理
@@ -399,20 +391,38 @@ void SslDataRead(Channel *ch)
         {
             // log("count: %d, depack data len: %d\n", count, depack_len);
             len = ch->next_len;
-            /* 3、写入到虚拟网卡 */
-            // TODO 判定数据类型
             int datalen = depack_len - RECORD_HEADER_LEN;
-            int wlen = write(tunfd, packet + RECORD_HEADER_LEN, datalen);
-            if (wlen < datalen)
+
+            // 判定数据类型
+            if (memcmp(packet, RECORD_TYPE_DATA, RECORD_TYPE_LABEL_LEN) == 0) // 数据类型
             {
-                log("虚拟网卡写入数据长度小于预期长度, write len: %d, buffer len: %d\n", wlen, len);
+                /* 3、写入到虚拟网卡 */
+                int wlen = write(tunfd, packet + RECORD_HEADER_LEN, datalen);
+                if (wlen < datalen)
+                {
+                    log("虚拟网卡写入数据长度小于预期长度, write len: %d, buffer len: %d\n", wlen, len);
+                }
             }
+            else if (memcmp(packet, RECORD_TYPE_AUTH, RECORD_TYPE_LABEL_LEN) == 0) // 数据类型
+            {
+                log("客户端认证消息:\n");
+                // TODO 判断认证消息类型
+
+                // 认证成功后推送tun配置
+                pushTunConf(ch);
+            }
+            else
+            {
+                log("未定义协议类型:\n");
+                dump_hex(packet, depack_len, 32);
+            }
+
             depack_len = sizeof(packet);
         }
         if (ret < 0)
         {
             log("非vpn协议数据\n");
-            dump_hex(ch->next, len, 16);
+            dump_hex(ch->next, len, 32);
             log("---------------\n");
             if (OPEN_PROXY)
             {
@@ -688,7 +698,7 @@ void *server_tun_thread(void *arg)
     return NULL;
 }
 
-char *pIp(int ip_addr)
+char *ipInt2String(int ip_addr)
 {
     struct in_addr var_ip;
 
@@ -725,11 +735,11 @@ int parseVipPool(const char *netIp, const char *netMask, vip_pool *vp)
     vp->vipPoolCap = vp->vipPoolEnd - vp->vipPoolStart + 1;
 
     printf("<<<<<<<<<<<<< vip net config >>>>>>>>>>>>>\n");
-    printf("net ip: %s,\n", pIp(vp->netIP));
-    printf("broadcast ip: %s,\n", pIp(vp->broadcastIp));
-    printf("svip: %s,\n", pIp(vp->sVip));
-    printf("vip pool start: %s\n", pIp(vp->vipPoolStart));
-    printf("vip pool end: %s\n", pIp(vp->vipPoolEnd));
+    printf("net ip: %s,\n", ipInt2String(vp->netIP));
+    printf("broadcast ip: %s,\n", ipInt2String(vp->broadcastIp));
+    printf("svip: %s,\n", ipInt2String(vp->sVip));
+    printf("vip pool start: %s\n", ipInt2String(vp->vipPoolStart));
+    printf("vip pool end: %s\n", ipInt2String(vp->vipPoolEnd));
     printf("vip pool size: %d\n", vp->vipPoolCap);
     printf("<<<<<<<<<<<<< vip net config >>>>>>>>>>>>>\n");
     return 0;
@@ -817,7 +827,7 @@ int allocateVip(char *ip, unsigned int *ipLen)
         }
 
         memset(vip, 0, sizeof(vip));
-        strcpy(vip, pIp(vipPool.vipPoolStart + vipCycleIndex));
+        strcpy(vip, ipInt2String(vipPool.vipPoolStart + vipCycleIndex));
 
         map<string, VIP_CONFIG_T *>::iterator iter = vipConfMap.find(vip);
         if (iter == vipConfMap.end())
@@ -878,7 +888,7 @@ int pushTunConf(Channel *ch)
     root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "global", GLOBAL_MODE);
     cJSON_AddNumberToObject(root, "mtu", MTU);
-    cJSON_AddStringToObject(root, "svip", pIp(vipPool.sVip));
+    cJSON_AddStringToObject(root, "svip", ipInt2String(vipPool.sVip));
     cJSON_AddStringToObject(root, "cvip", vip);
     cJSON_AddStringToObject(root, "cidr", vipPool.ipv4_net);
     char *str = cJSON_PrintUnformatted(root);
@@ -891,7 +901,7 @@ int pushTunConf(Channel *ch)
     memcpy(conf + RECORD_TYPE_LABEL_LEN, str, strlen(str));
 
     enpack(RECORD_TYPE_CONTROL, conf, strlen(str) + RECORD_TYPE_LABEL_LEN, packet, &enpackLen);
-    // dump_hex(packet + 2, enpackLen - 2, 16);
+    // dump_hex(packet + 2, enpackLen - 2, 32);
 
     // 推送数据 TODO 发送数据不全需要处理
     writeLen = SSL_write(ssl, packet, enpackLen);

@@ -2,7 +2,7 @@
  * @Author: lw liuwei@flksec.com
  * @Date: 2023-09-06 10:02:22
  * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2023-09-19 22:36:05
+ * @LastEditTime: 2023-10-09 22:17:44
  * @FilePath: \stream-echo-nginx-module-master\src\protocol.h
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -20,13 +20,16 @@ extern "C"
     extern const unsigned int HEADER_LEN;
     extern const unsigned int RECORD_HEADER_LEN;
 
-    extern const unsigned char VPN_LABEL[VPN_LABEL_LEN]; // vpn数据标记
-    extern const unsigned char RECORD_TYPE_DATA[RECORD_TYPE_LABEL_LEN];
-    extern const unsigned char RECORD_TYPE_CONTROL[RECORD_TYPE_LABEL_LEN];
-    extern const unsigned char RECORD_TYPE_CONTROL_TUN_CONFIG[RECORD_TYPE_LABEL_LEN];
-    extern const unsigned char RECORD_TYPE_CONTROL_ROUTE_CONFIG[RECORD_TYPE_LABEL_LEN];
-    extern const unsigned char RECORD_TYPE_AUTH[RECORD_TYPE_LABEL_LEN];
-    extern const unsigned char RECORD_TYPE_ALARM[RECORD_TYPE_LABEL_LEN];
+    extern const unsigned char VPN_LABEL[VPN_LABEL_LEN];                                // vpn标记
+    extern const unsigned char RECORD_TYPE_DATA[RECORD_TYPE_LABEL_LEN];                 // vpn数据标记
+    extern const unsigned char RECORD_TYPE_CONTROL[RECORD_TYPE_LABEL_LEN];              // vpn控制协议标记
+    extern const unsigned char RECORD_TYPE_CONTROL_TUN_CONFIG[RECORD_TYPE_LABEL_LEN];   // vpn虚拟网卡配置控制协议
+    extern const unsigned char RECORD_TYPE_CONTROL_ROUTE_CONFIG[RECORD_TYPE_LABEL_LEN]; // vpn路由配置控制协议
+    extern const unsigned char RECORD_TYPE_AUTH[RECORD_TYPE_LABEL_LEN];                 // vpn认证协议
+    extern const unsigned char RECORD_TYPE_AUTH_ACCOUNT[RECORD_TYPE_LABEL_LEN];         // vpn账号认证协议
+    extern const unsigned char RECORD_TYPE_AUTH_PHONE[RECORD_TYPE_LABEL_LEN];           // vpn短信认证协议
+    extern const unsigned char RECORD_TYPE_AUTH_TOKEN[RECORD_TYPE_LABEL_LEN];           // vpn动态口令认证协议
+    extern const unsigned char RECORD_TYPE_ALARM[RECORD_TYPE_LABEL_LEN];                // vpn告警协议
 
     /**
      * @brief 对数据进行封包处理（类似tlv格式），VPN_LABEL + RECORD_TYPE + RECORD_LENGTH + 数据

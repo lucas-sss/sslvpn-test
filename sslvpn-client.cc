@@ -30,6 +30,8 @@ static int controlHandler(unsigned char *data, unsigned int len);
 
 static void *client_tun_thread(void *arg);
 
+static int sendAuthData(SSL *ssl);
+
 void ShowCerts(SSL *ssl)
 {
     X509 *cert;
@@ -178,6 +180,14 @@ int main(int argc, char **argv)
     }
     printf("SSL_connect finish\n");
 
+    // 发送登录认证消息
+    if (sendAuthData(ssl) != 0)
+    {
+        printf("发送登录认证数据失败\n");
+        goto exit;
+    }
+
+    /*循环读取服务端响应数据*/
     while (1)
     {
         if (next == NULL)
@@ -356,4 +366,29 @@ static int initTun(int global, char *cvip, char *ipv4_net, unsigned int mtu)
     return 0;
 err:
     return -1;
+}
+
+static int sendAuthData(SSL *ssl)
+{
+    int writeLen = 0;
+    unsigned char conf[512] = {0};
+    unsigned char packet[514] = {0};
+    unsigned int enpackLen = sizeof(packet);
+    const char *data = "{\"username\":\"test\",\"passwork\":\"123456\"}";
+
+    // 封装数据
+    memset(conf, 0, sizeof(conf));
+    memcpy(conf, RECORD_TYPE_AUTH_ACCOUNT, RECORD_TYPE_LABEL_LEN);
+    memcpy(conf + RECORD_TYPE_LABEL_LEN, data, strlen(data));
+
+    enpack(RECORD_TYPE_AUTH, conf, strlen(data) + RECORD_TYPE_LABEL_LEN, packet, &enpackLen);
+
+    // 发送登录认证数据
+    writeLen = SSL_write(ssl, packet, enpackLen);
+    if (writeLen <= 0)
+    {
+        printf("ssl write auth data fail %d\n", writeLen);
+        return -1;
+    }
+    return 0;
 }
