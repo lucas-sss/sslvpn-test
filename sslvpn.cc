@@ -53,6 +53,8 @@ static const int MAX_BUF_LEN = 20480;
 static const int MTU = 1500;
 static const bool GLOBAL_MODE = false;
 static const bool OPEN_PROXY = true;
+static const char *PROXY_ADDR = "127.0.0.1";
+static const int PROXY_PORT = 9112;
 
 typedef struct
 {
@@ -137,7 +139,7 @@ struct Channel
     }
     ~Channel()
     {
-        log("deleting fd %d\n", fd_);
+        log("Channel[%p]删除 -> deleting fd %d\n", this, fd_);
         epoll_ctl(epollfd, EPOLL_CTL_DEL, fd_, NULL);
         close(fd_);
         if (ssl_ && !isproxy_) // 代理channel中的ssl复用主服务里的ssl，因此这里需要进行判断，避免重复释放ssl
@@ -155,7 +157,7 @@ struct Channel
         }
         if (proxyCh_ != NULL)
         {
-            log("删除代理Channel\n");
+            log("删除代理Channel: %p\n", proxyCh_);
             epoll_ctl(epollfd, EPOLL_CTL_DEL, proxyCh_->fd_, NULL);
             close(proxyCh_->fd_);
             delete proxyCh_;
@@ -297,25 +299,30 @@ void handleHandshake(Channel *ch)
     {
         showClientCerts(ch->ssl_);
         ch->sslConnected_ = true;
-        log("new ssl: %p\n", ch->ssl_);
+        log("new ssl: %p for fd: %d\n", ch->ssl_, ch->fd_);
         // 建立和上游的tcp连接
         if (OPEN_PROXY)
         {
-            int proxyFd = connect_proxy("127.0.0.1", 9112);
-            if (proxyFd > 0)
+            int fd = SSL_get_fd(ch->ssl_);
+            map<int, int>::iterator iter = proxyMap.find(fd);
+            if (iter == proxyMap.end()) // 防止一个连接多次握手（更新密钥）导致重复创建代理
             {
-                int fd = SSL_get_fd(ch->ssl_);
-                proxyMap.insert(pair<int, int>(fd, proxyFd));
-                // 添加到epoll列表中
-                Channel *proxyCh = new Channel(proxyFd, EPOLLIN | EPOLLET, true);
-                proxyCh->ssl_ = ch->ssl_;
-                addEpollFd(epollfd, proxyCh);
-                ch->proxyCh_ = proxyCh;
-            }
-            else
-            {
-                log("连接代理服务失败: %d\n", proxyFd);
-                // TODO
+                int proxyFd = connect_proxy(PROXY_ADDR, PROXY_PORT);
+                if (proxyFd > 0)
+                {
+                    proxyMap.insert(pair<int, int>(fd, proxyFd));
+                    // 添加到epoll列表中
+                    Channel *proxyCh = new Channel(proxyFd, EPOLLIN | EPOLLET, true);
+                    log("新建代理Channel\n");
+                    proxyCh->ssl_ = ch->ssl_;
+                    addEpollFd(epollfd, proxyCh);
+                    ch->proxyCh_ = proxyCh;
+                }
+                else
+                {
+                    log("连接代理服务失败: %d\n", proxyFd);
+                    // TODO
+                }
             }
         }
 
@@ -617,7 +624,7 @@ int g_stop = 0;
 
 void loop_once(int epollfd, int waitms)
 {
-    const int kMaxEvents = 20;
+    const int kMaxEvents = 1024;
     struct epoll_event activeEvs[kMaxEvents];
     int n = epoll_wait(epollfd, activeEvs, kMaxEvents, waitms);
     for (int i = n - 1; i >= 0; i--)
