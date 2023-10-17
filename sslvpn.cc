@@ -98,7 +98,7 @@ struct Channel
     bool sslConnected_;
     int events_;
 
-    unsigned char buf[4096 + 8];
+    unsigned char buf[MAX_BUF_LEN];
 
     /*作为vpn服务端使用*/
     char vip_[64];
@@ -378,7 +378,7 @@ void proxyDataRead(Channel *ch)
 void SslDataRead(Channel *ch)
 {
     int ret = 0;
-    unsigned char packet[4096];
+    unsigned char packet[MAX_BUF_LEN];
     unsigned int depack_len = 0;
 
     if (ch->next == NULL)
@@ -386,7 +386,7 @@ void SslDataRead(Channel *ch)
         ch->next = ch->buf;
         ch->next_len = 0;
     }
-    int len = SSL_read(ch->ssl_, ch->next + ch->next_len, 4096 + HEADER_LEN - ch->next_len);
+    int len = SSL_read(ch->ssl_, ch->next + ch->next_len, MAX_BUF_LEN - ch->next_len);
     int ssle = SSL_get_error(ch->ssl_, len);
     if (len > 0)
     {
@@ -401,7 +401,7 @@ void SslDataRead(Channel *ch)
             int datalen = depack_len - RECORD_HEADER_LEN;
 
             // 判定数据类型
-            if (memcmp(packet, RECORD_TYPE_DATA, RECORD_TYPE_LABEL_LEN) == 0) // 数据类型
+            if (memcmp(packet, RECORD_TYPE_DATA, RECORD_TYPE_LABEL_LEN) == 0) // vpn数据
             {
                 /* 3、写入到虚拟网卡 */
                 int wlen = write(tunfd, packet + RECORD_HEADER_LEN, datalen);
@@ -410,7 +410,7 @@ void SslDataRead(Channel *ch)
                     log("虚拟网卡写入数据长度小于预期长度, write len: %d, buffer len: %d\n", wlen, len);
                 }
             }
-            else if (memcmp(packet, RECORD_TYPE_AUTH, RECORD_TYPE_LABEL_LEN) == 0) // 数据类型
+            else if (memcmp(packet, RECORD_TYPE_AUTH, RECORD_TYPE_LABEL_LEN) == 0) // 认证数据
             {
                 log("客户端认证消息:\n");
                 // TODO 判断认证消息类型
@@ -624,7 +624,7 @@ int g_stop = 0;
 
 void loop_once(int epollfd, int waitms)
 {
-    const int kMaxEvents = 1024;
+    const int kMaxEvents = 10240;
     struct epoll_event activeEvs[kMaxEvents];
     int n = epoll_wait(epollfd, activeEvs, kMaxEvents, waitms);
     for (int i = n - 1; i >= 0; i--)

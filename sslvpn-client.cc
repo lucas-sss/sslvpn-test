@@ -80,6 +80,12 @@ int main(int argc, char **argv)
     const char *enc_key_file = "certs/encclient.key";
     const char *enc_cert_file = "certs/encclient.crt";
 
+    if (argc != 3)
+    {
+        printf("please run this: ./sslvpn-client server_ip server_port\n");
+        exit(-1);
+    }
+
     // 双证书相关client的各种定义
     meth = NTLS_client_method();
     // 生成上下文
