@@ -295,6 +295,7 @@ static void *client_tun_thread(void *arg)
         }
         bzero(buf, MAX_BUF_SIZE + 1);
     }
+    return NULL;
 }
 
 static int controlHandler(unsigned char *data, unsigned int len)
