@@ -89,6 +89,7 @@ int epollfd, listenfd;
 
 // 虚拟网卡设备fd
 int tunfd;
+int tunEpollFd;
 
 struct Channel
 {
@@ -705,6 +706,74 @@ void *server_tun_thread(void *arg)
     return NULL;
 }
 
+/**
+ * @brief 功能暂时不可用
+ *
+ * @param arg
+ * @return void*
+ */
+void *server_multi_queue_tun_thread(void *arg)
+{
+    size_t ret_length = 0;
+    unsigned char buf[MAX_BUF_LEN];
+    unsigned char packet[MAX_BUF_LEN + HEADER_LEN];
+    unsigned int enpack_len = 0;
+
+    struct epoll_event events[1024];
+    while (1)
+    {
+        int num_events = epoll_wait(tunEpollFd, events, 1024, -1);
+        int i;
+        for (i = 0; i < num_events; i++)
+        {
+            if (events[i].events & EPOLLIN)
+            {
+                int fd = events[i].data.fd;
+                printf("tun fd[%d] data comming\n", fd);
+                // 1、读取数据
+                ret_length = read(fd, buf, sizeof(buf));
+                if (ret_length < 0)
+                {
+                    log("tun read len < 0\n");
+                    break;
+                }
+                // 2、分析报文
+                unsigned char src_ip[4];
+                unsigned char dst_ip[4];
+                memcpy(dst_ip, &buf[16], 4);
+                memcpy(src_ip, &buf[12], 4);
+                printf("read tun data: %d.%d.%d.%d -> %d.%d.%d.%d (%d)\n", dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3], src_ip[0], src_ip[1], src_ip[2], src_ip[3], ret_length);
+
+                // 3、查询客户端
+                char ip[MAX_IPV4_STR_LEN] = {0};
+                bzero(ip, MAX_IPV4_STR_LEN);
+                sprintf(ip, "%d.%d.%d.%d", dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3]);
+
+                map<string, SSL *>::iterator iter = maps.find(ip);
+                if (iter == maps.end())
+                {
+                    continue;
+                }
+                SSL *ssl = iter->second;
+
+                // 4、对数据进行封包处理
+                enpack_len = sizeof(packet);
+                enpack(RECORD_TYPE_DATA, buf, ret_length, packet, &enpack_len);
+
+                // 5、发消息给客户端
+                // int len = SSL_write(session->clientSslCache->ssl, buf, ret_length);
+                int len = SSL_write(ssl, packet, enpack_len);
+                if (len <= 0)
+                {
+                    log("消息'%s'发送失败! 错误代码是%d, 错误信息是'%s'\n", buf, errno, strerror(errno));
+                }
+                bzero(buf, MAX_BUF_LEN);
+            }
+        }
+    }
+    return NULL;
+}
+
 char *ipInt2String(int ip_addr)
 {
     struct in_addr var_ip;
@@ -781,7 +850,7 @@ int netmask2prefixlen(const char *ip_str)
 
 void initTun(unsigned int mtu, const char *ipv4, const char *netmask)
 {
-    int ret = 0;
+    int i, ret = 0;
     TUNCONFIG_T tunCfg = {0};
     struct in_addr var_ip;
 
@@ -806,6 +875,31 @@ void initTun(unsigned int mtu, const char *ipv4, const char *netmask)
     pthread_t serverTunThread;
     ret = pthread_create(&serverTunThread, NULL, server_tun_thread, &tunfd);
     check0(ret != 0, "create server tun thread fail: %d", ret);
+
+    // // 创建多队列虚拟网卡
+    // struct epoll_event ev;
+    // int size = 1;
+    // int fds[size];
+
+    // ret = tun_create_mq(&tunCfg, size, fds);
+    // check0(ret != 0, "create multi queue tun fail: %d", ret);
+
+    // // 创建epoll
+    // tunEpollFd = epoll_create1(EPOLL_CLOEXEC);
+    // memset(&ev, 0, sizeof(ev));
+    // ev.events = EPOLLIN | EPOLLET; // Read events with edge-triggered mode;
+
+    // for (i = 0; i < size; i++)
+    // {
+    //     tun_set_queue(fds[i], 1);
+    //     // 把队列fd添加到epoll中
+    //     ev.data.fd = fds[i];
+    //     int r = epoll_ctl(tunEpollFd, EPOLL_CTL_ADD, fds[i], &ev);
+    //     check0(r, "epoll_ctl[tun] add failed[%d], %s", errno, strerror(errno));
+    // }
+    // pthread_t serverTunThread;
+    // ret = pthread_create(&serverTunThread, NULL, server_multi_queue_tun_thread, &tunEpollFd);
+    // check0(ret != 0, "create server tun thread fail: %d", ret);
 }
 
 /**

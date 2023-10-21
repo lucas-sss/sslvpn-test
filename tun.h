@@ -2,7 +2,7 @@
  * @Author: lw liuwei@flksec.com
  * @Date: 2023-09-12 22:34:17
  * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2023-09-20 23:12:52
+ * @LastEditTime: 2023-10-21 10:25:56
  * @FilePath: \openssl-example\tun.h
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -40,6 +40,10 @@ extern "C"
      * @return
      */
     int tun_create(TUNCONFIG_T *tunCfg);
+
+    int tun_create_mq(TUNCONFIG_T *tunCfg, int queues, int *fds);
+
+    int tun_set_queue(int fd, int enable);
 
 #ifdef __cplusplus
 }

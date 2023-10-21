@@ -71,6 +71,74 @@ extern "C"
         return 0;
     }
 
+    int tun_create_mq(TUNCONFIG_T *tunCfg, int queues, int *fds)
+    {
+        struct ifreq ifr;
+        int fd, err, i;
+
+        // if (!dev)
+        //     return -1;
+
+        memset(&ifr, 0, sizeof(ifr));
+        /* Flags: IFF_TUN   - TUN device (no Ethernet headers)
+         *        IFF_TAP   - TAP device
+         *
+         *        IFF_NO_PI - Do not provide packet information
+         *        IFF_MULTI_QUEUE - Create a queue of multiqueue device
+         */
+        ifr.ifr_flags = IFF_TUN | IFF_NO_PI | IFF_MULTI_QUEUE;
+        // strcpy(ifr.ifr_name, dev);
+        if (*tunCfg->dev != '\0')
+        {
+            strcpy(ifr.ifr_name, tunCfg->dev);
+        }
+
+        for (i = 0; i < queues; i++)
+        {
+            if ((fd = open("/dev/net/tun", O_RDWR)) < 0)
+            {
+                goto err;
+            }
+            err = ioctl(fd, TUNSETIFF, (void *)&ifr);
+            if (err)
+            {
+                close(fd);
+                goto err;
+            }
+            printf("alloc tun fd: %d\n", fd);
+            fds[i] = fd;
+        }
+        // 回显设置dev
+        if (*tunCfg->dev == '\0')
+        {
+            strcpy(tunCfg->dev, ifr.ifr_name);
+        }
+        config_tun(tunCfg);
+
+        return 0;
+    err:
+        printf("tun_create_mq fail, err: %d\n", err);
+        for (--i; i >= 0; i--)
+        {
+            close(fds[i]);
+        }
+        return err;
+    }
+
+    int tun_set_queue(int fd, int enable)
+    {
+        struct ifreq ifr;
+
+        memset(&ifr, 0, sizeof(ifr));
+
+        if (enable)
+            ifr.ifr_flags = IFF_ATTACH_QUEUE;
+        else
+            ifr.ifr_flags = IFF_DETACH_QUEUE;
+
+        return ioctl(fd, TUNSETQUEUE, (void *)&ifr);
+    }
+
     int tun_create(TUNCONFIG_T *tunCfg)
     {
         int flags = IFF_TUN | IFF_NO_PI;
