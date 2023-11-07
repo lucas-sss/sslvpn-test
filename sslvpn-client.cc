@@ -55,8 +55,22 @@ void ShowCerts(SSL *ssl)
     }
 }
 
+int debug = 0;
 SSL *ssl;
 int tun_fd;
+
+void do_debug(char *msg, ...)
+{
+
+    va_list argp;
+
+    if (debug)
+    {
+        va_start(argp, msg);
+        vfprintf(stderr, msg, argp);
+        va_end(argp);
+    }
+}
 
 int main(int argc, char **argv)
 {
@@ -79,6 +93,11 @@ int main(int argc, char **argv)
     const char *sign_cert_file = "certs/signclient.crt";
     const char *enc_key_file = "certs/encclient.key";
     const char *enc_cert_file = "certs/encclient.crt";
+
+    int global = 0;
+    char *cvip = "12.12.9.2";
+    char *ipv4_net = "12.12.9.0/24";
+    unsigned int mtu = 1500;
 
     if (argc != 3)
     {
@@ -187,11 +206,13 @@ int main(int argc, char **argv)
     printf("SSL_connect finish\n");
 
     // 发送登录认证消息
-    if (sendAuthData(ssl) != 0)
-    {
-        printf("发送登录认证数据失败\n");
-        goto exit;
-    }
+    // if (sendAuthData(ssl) != 0)
+    // {
+    //     printf("发送登录认证数据失败\n");
+    //     goto exit;
+    // }
+
+    initTun(global, cvip, ipv4_net, mtu);
 
     /*循环读取服务端响应数据*/
     while (1)
@@ -206,7 +227,25 @@ int main(int argc, char **argv)
         if (len <= 0)
         {
             printf("消息接收失败！错误代码是%d, 错误信息是'%s'\n", errno, strerror(errno));
-            goto finish;
+            int ssle = SSL_get_error(ssl, len);
+            if (len < 0 && ssle != SSL_ERROR_WANT_READ)
+            {
+                if (errno != EAGAIN)
+                {
+                    printf("SSL_read return %d, error: %d, errno: %d, msg: %s\n", len, ssle, errno, strerror(errno));
+                    goto finish;
+                }
+                continue;
+            }
+            if (len == 0)
+            {
+                if (ssle == SSL_ERROR_ZERO_RETURN)
+                    printf("SSL has been shutdown.\n");
+                else
+                    printf("Connection has been aborted.\n");
+                goto finish;
+            }
+            continue;
         }
 
         // 2、对数据进行解包
@@ -266,10 +305,14 @@ err:
 
 static void *client_tun_thread(void *arg)
 {
+    int i = 1;
+    int n = 2;
     int ret_length;
     unsigned char buf[MAX_BUF_SIZE + 1];
     unsigned char packet[MAX_BUF_SIZE + 1 + HEADER_LEN];
     unsigned int enpack_len = 0;
+    unsigned char bigbuff[MAX_BUF_SIZE * n + HEADER_LEN * n];
+    unsigned int copylen = 0;
 
     // 2、读取虚拟网卡数据
     while (1)
@@ -293,12 +336,25 @@ static void *client_tun_thread(void *arg)
         enpack_len = sizeof(packet);
         enpack(RECORD_TYPE_DATA, buf, ret_length, packet, &enpack_len);
 
+        memcpy(bigbuff + copylen, packet, enpack_len);
+        copylen += enpack_len;
+        if (i % (n + 1) != 0)
+        {
+            // printf("积攒数据: %d\n", enpack_len);
+            i++;
+            continue;
+        }
+        // printf("发送数据: %d\n", copylen);
+
         // 4、直接发送到服务端
-        int len = SSL_write(ssl, packet, enpack_len);
+        // int len = SSL_write(ssl, packet, enpack_len);
+        int len = SSL_write(ssl, bigbuff, copylen);
         if (len <= 0)
         {
             printf("消息'%s'发送失败! 错误代码是%d, 错误信息是'%s'\n", buf, errno, strerror(errno));
         }
+        copylen = 0;
+        i = 1;
         bzero(buf, MAX_BUF_SIZE + 1);
     }
     return NULL;
