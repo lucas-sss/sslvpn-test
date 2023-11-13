@@ -51,10 +51,15 @@ using namespace std;
 
 static const int MAX_BUF_LEN = 20480;
 static const int MTU = 1500;
-static const bool GLOBAL_MODE = false;
-static const bool OPEN_PROXY = true;
-static const char *PROXY_ADDR = "127.0.0.1";
-static const int PROXY_PORT = 9112;
+static char *TUN_DEV = "tun21";
+int tunmtu = MTU;
+char crl[512];
+
+static bool GLOBAL_MODE = false;
+static bool OPEN_PROXY = false;
+char proxyaddr[24];
+char PROXY_IP[15];
+int PROXY_PORT = 0;
 
 typedef struct
 {
@@ -89,6 +94,7 @@ int epollfd, listenfd;
 
 // 虚拟网卡设备fd
 int tunfd;
+int tunfd2;
 int tunEpollFd;
 
 struct Channel
@@ -308,13 +314,13 @@ void handleHandshake(Channel *ch)
             map<int, int>::iterator iter = proxyMap.find(fd);
             if (iter == proxyMap.end()) // 防止一个连接多次握手（更新密钥）导致重复创建代理
             {
-                int proxyFd = connect_proxy(PROXY_ADDR, PROXY_PORT);
+                int proxyFd = connect_proxy(PROXY_IP, PROXY_PORT);
                 if (proxyFd > 0)
                 {
                     proxyMap.insert(pair<int, int>(fd, proxyFd));
                     // 添加到epoll列表中
                     Channel *proxyCh = new Channel(proxyFd, EPOLLIN | EPOLLET, true);
-                    log("新建代理Channel\n");
+                    log("SSL[%p]新建代理Channel\n", ch->ssl_);
                     proxyCh->ssl_ = ch->ssl_;
                     addEpollFd(epollfd, proxyCh);
                     ch->proxyCh_ = proxyCh;
@@ -533,7 +539,7 @@ void initSSL()
     bool verifyClient = false;
     bool useTLS13 = false;
     string ca = "certs/ca.crt", signcert = "certs/signcert.crt", singkey = "certs/signkey.key", enccert = "certs/enccert.crt", enckey = "certs/enckey.key";
-    string cert = "certs/server.pem", key = "certs/server.pem", crl = "";
+    string cert = "certs/server.pem", key = "certs/server.pem";
     SSL_load_error_strings();
     r = SSL_library_init();
     check0(!r, "SSL_library_init failed");
@@ -580,7 +586,7 @@ void initSSL()
         SSL_CTX_set_verify(g_sslCtx, SSL_VERIFY_NONE, NULL); // 不验证客户端；
     }
 
-    if (!crl.empty())
+    if (strlen(crl) > 0)
     {
         X509_STORE *store = NULL;
         X509_LOOKUP *lookup = NULL;
@@ -591,8 +597,8 @@ void initSSL()
         lookup = X509_STORE_add_lookup(store, X509_LOOKUP_file());
         check0(store == NULL, "X509_STORE_add_lookup() failed");
 
-        r = X509_LOOKUP_load_file(lookup, crl.c_str(), X509_FILETYPE_PEM);
-        check0(store == NULL, "X509_LOOKUP_load_file(\"%s\") failed", crl.c_str());
+        r = X509_LOOKUP_load_file(lookup, crl, X509_FILETYPE_PEM);
+        check0(store == NULL, "X509_LOOKUP_load_file(\"%s\") failed", crl);
 
         X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL);
         printf("local crl finish\n");
@@ -656,6 +662,7 @@ void handleInterrupt(int sig)
 
 void *server_tun_thread(void *arg)
 {
+    int *tfd = (int *)arg;
     size_t ret_length = 0;
     unsigned char buf[MAX_BUF_LEN];
     unsigned char packet[MAX_BUF_LEN + HEADER_LEN];
@@ -665,7 +672,7 @@ void *server_tun_thread(void *arg)
     while (1)
     {
         // 1、读取数据
-        ret_length = read(tunfd, buf, sizeof(buf));
+        ret_length = read(*tfd, buf, sizeof(buf));
         if (ret_length < 0)
         {
             log("tun read len < 0\n");
@@ -676,7 +683,7 @@ void *server_tun_thread(void *arg)
         unsigned char dst_ip[4];
         memcpy(dst_ip, &buf[16], 4);
         memcpy(src_ip, &buf[12], 4);
-        // printf("read tun data: %d.%d.%d.%d -> %d.%d.%d.%d (%d)\n", dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3], src_ip[0], src_ip[1], src_ip[2], src_ip[3], ret_length);
+        // printf("PID[%d] tun[%d] read tun data: %d.%d.%d.%d -> %d.%d.%d.%d (%d)\n", getpid(), *tfd, dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3], src_ip[0], src_ip[1], src_ip[2], src_ip[3], ret_length);
 
         // 3、查询客户端
         char ip[MAX_IPV4_STR_LEN] = {0};
@@ -719,17 +726,17 @@ void *server_multi_queue_tun_thread(void *arg)
     unsigned char packet[MAX_BUF_LEN + HEADER_LEN];
     unsigned int enpack_len = 0;
 
-    struct epoll_event events[1024];
+    struct epoll_event events[10240];
     while (1)
     {
-        int num_events = epoll_wait(tunEpollFd, events, 1024, -1);
+        int num_events = epoll_wait(tunEpollFd, events, 1024, 100);
         int i;
         for (i = 0; i < num_events; i++)
         {
             if (events[i].events & EPOLLIN)
             {
                 int fd = events[i].data.fd;
-                printf("tun fd[%d] data comming\n", fd);
+                // printf("tun fd[%d] data comming\n", fd);
                 // 1、读取数据
                 ret_length = read(fd, buf, sizeof(buf));
                 if (ret_length < 0)
@@ -742,7 +749,7 @@ void *server_multi_queue_tun_thread(void *arg)
                 unsigned char dst_ip[4];
                 memcpy(dst_ip, &buf[16], 4);
                 memcpy(src_ip, &buf[12], 4);
-                printf("read tun data: %d.%d.%d.%d -> %d.%d.%d.%d (%d)\n", dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3], src_ip[0], src_ip[1], src_ip[2], src_ip[3], ret_length);
+                // printf("read tun data: %d.%d.%d.%d -> %d.%d.%d.%d (%d)\n", dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3], src_ip[0], src_ip[1], src_ip[2], src_ip[3], ret_length);
 
                 // 3、查询客户端
                 char ip[MAX_IPV4_STR_LEN] = {0};
@@ -870,7 +877,6 @@ void initTun(unsigned int mtu, const char *ipv4, const char *netmask)
     // 创建虚拟网卡
     tunfd = tun_create(&tunCfg);
     check0(tunfd <= 0, "create tun fd fail: %d", tunfd);
-
     // 创建server tun读取线程
     pthread_t serverTunThread;
     ret = pthread_create(&serverTunThread, NULL, server_tun_thread, &tunfd);
@@ -880,9 +886,23 @@ void initTun(unsigned int mtu, const char *ipv4, const char *netmask)
     // struct epoll_event ev;
     // int size = 1;
     // int fds[size];
-
+    // // 指明虚拟网卡名称
+    // strncpy(tunCfg.dev, TUN_DEV, sizeof(tunCfg.dev));
     // ret = tun_create_mq(&tunCfg, size, fds);
     // check0(ret != 0, "create multi queue tun fail: %d", ret);
+    // for (i = 0; i < size; i++)
+    // {
+    //     tun_set_queue(fds[i], 1);
+    // }
+    // tunfd = fds[0];
+    // tunfd2 = fds[1];
+
+    // 创建server tun读取线程
+    // pthread_t serverTunThread;
+    // ret = pthread_create(&serverTunThread, NULL, server_tun_thread, &tunfd);
+    // check0(ret != 0, "create server tun thread fail: %d", ret);
+    // ret = pthread_create(&serverTunThread, NULL, server_tun_thread, &tunfd2);
+    // check0(ret != 0, "create server tun thread2 fail: %d", ret);
 
     // // 创建epoll
     // tunEpollFd = epoll_create1(EPOLL_CLOEXEC);
@@ -891,7 +911,6 @@ void initTun(unsigned int mtu, const char *ipv4, const char *netmask)
 
     // for (i = 0; i < size; i++)
     // {
-    //     tun_set_queue(fds[i], 1);
     //     // 把队列fd添加到epoll中
     //     ev.data.fd = fds[i];
     //     int r = epoll_ctl(tunEpollFd, EPOLL_CTL_ADD, fds[i], &ev);
@@ -988,7 +1007,7 @@ int pushTunConf(Channel *ch)
     // 创建配置json
     root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "global", GLOBAL_MODE);
-    cJSON_AddNumberToObject(root, "mtu", MTU);
+    cJSON_AddNumberToObject(root, "mtu", tunmtu);
     cJSON_AddStringToObject(root, "svip", ipInt2String(vipPool.sVip));
     cJSON_AddStringToObject(root, "cvip", vip);
     cJSON_AddStringToObject(root, "cidr", vipPool.ipv4_net);
@@ -1014,26 +1033,118 @@ int pushTunConf(Channel *ch)
     return 0;
 }
 
+/**************************************************************************
+ * usage: prints usage and exits.                                         *
+ **************************************************************************/
+void usage(void)
+{
+    fprintf(stderr, "Usage:\n");
+    fprintf(stderr, "-p: 服务运行端口, 默认: 1443\n");
+    fprintf(stderr, "-i: 虚拟网络ip地址, 默认: 10.12.9.0\n");
+    fprintf(stderr, "-m: 虚拟网络掩码, 默认: 255.255.255.0\n");
+    fprintf(stderr, "-u: 虚拟网卡mtu值, 例如: 1500\n");
+    fprintf(stderr, "-g: 开启客户端全代理模式\n");
+    fprintf(stderr, "-x: 使用代理服务并设置代理服务ip和端口,例如: 127.0.0.1:9112\n");
+    fprintf(stderr, "-l: 使用代理服务并设置代理服务ip和端口,例如: 127.0.0.1:9112\n");
+    fprintf(stderr, "-h: 使用帮助\n");
+    exit(1);
+}
+
 int main(int argc, char **argv)
 {
+    int option;
     int port = 1443;
-    const char *ip = "10.12.9.0";
-    const char *mask = "255.255.255.0";
+    const char *defaultVip = "10.12.9.0";
+    const char *defaultVmask = "255.255.255.0";
+    char vip[15] = {0};
+    char vmask[15] = {0};
+    char *split, *proxyportptr;
 
     signal(SIGINT, handleInterrupt);
 
-    initSSL();
+    memset(vip, 0, sizeof(vip));
+    memset(vmask, 0, sizeof(vmask));
+    memset(proxyaddr, 0, sizeof(proxyaddr));
+    memset(crl, 0, sizeof(crl));
 
-    initTun(MTU, ip, mask);
+    strncpy(vip, defaultVip, sizeof(vip));
+    strncpy(vmask, defaultVmask, sizeof(vmask));
+
+    /* Check command line options */
+    while ((option = getopt(argc, argv, "i:m:p:u:x:l:h")) > 0)
+    {
+        switch (option)
+        {
+        case 'p':
+            port = atoi(optarg);
+            break;
+        case 'i':
+            memset(vip, 0, sizeof(vip));
+            strncpy(vip, optarg, sizeof(vip));
+            break;
+        case 'm':
+            memset(vmask, 0, sizeof(vmask));
+            strncpy(vmask, optarg, sizeof(vmask));
+            break;
+        case 'u':
+            tunmtu = atoi(optarg);
+            break;
+        case 'g':
+            OPEN_PROXY = true;
+            break;
+        case 'x':
+            strncpy(proxyaddr, optarg, sizeof(proxyaddr));
+            split = strtok(proxyaddr, ":");
+            if (split == NULL)
+            {
+                usage();
+            }
+            *split = '\0';
+            proxyportptr = split + 1;
+            strcpy(PROXY_IP, proxyaddr);
+            PROXY_PORT = atoi(proxyportptr);
+            break;
+        case 'l':
+            strncpy(crl, optarg, sizeof(crl));
+            break;
+        case 'h':
+            usage();
+            break;
+        default:
+            printf("Unknown option %c\n", option);
+            usage();
+        }
+    }
+    argv += optind;
+    argc -= optind;
+
+    if (argc > 0)
+    {
+        printf("Too many options!\n");
+        usage();
+    }
+    if (port <= 0 || port > 65535)
+    {
+        printf("服务端口设置错误, 0 < mtu <= 65535\n");
+        usage();
+    }
+    if (tunmtu < 1500 || tunmtu > 15000)
+    {
+        printf("mtu设置错误, 1500 <= mtu <= 15000\n");
+        usage();
+    }
+    if (*vip == '\0' || *vmask == '\0')
+    {
+        printf("虚拟网络设置错误, 请同时设置vip与vmask\n");
+        usage();
+    }
+
+    initSSL();
 
     epollfd = epoll_create1(EPOLL_CLOEXEC);
 
-    if (argc > 2)
-    {
-        port = atoi(argv[1]);
-        if (port <= 0 || port > 65535)
-            port = 1443;
-    }
+    // 创建并配置虚拟网卡
+    initTun(tunmtu, vip, vmask);
 
     listenfd = createServer(port);
     Channel *cl = new Channel(listenfd, EPOLLIN | EPOLLET, false);

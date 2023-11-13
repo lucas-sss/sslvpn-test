@@ -76,8 +76,10 @@ extern "C"
         struct ifreq ifr;
         int fd, err, i;
 
-        // if (!dev)
-        //     return -1;
+        if (!tunCfg || *tunCfg->dev == '\0')
+        {
+            return -1;
+        }
 
         memset(&ifr, 0, sizeof(ifr));
         /* Flags: IFF_TUN   - TUN device (no Ethernet headers)
@@ -87,11 +89,7 @@ extern "C"
          *        IFF_MULTI_QUEUE - Create a queue of multiqueue device
          */
         ifr.ifr_flags = IFF_TUN | IFF_NO_PI | IFF_MULTI_QUEUE;
-        // strcpy(ifr.ifr_name, dev);
-        if (*tunCfg->dev != '\0')
-        {
-            strcpy(ifr.ifr_name, tunCfg->dev);
-        }
+        strcpy(ifr.ifr_name, tunCfg->dev);
 
         for (i = 0; i < queues; i++)
         {
@@ -108,11 +106,7 @@ extern "C"
             printf("alloc tun fd: %d\n", fd);
             fds[i] = fd;
         }
-        // 回显设置dev
-        if (*tunCfg->dev == '\0')
-        {
-            strcpy(tunCfg->dev, ifr.ifr_name);
-        }
+
         config_tun(tunCfg);
 
         return 0;
