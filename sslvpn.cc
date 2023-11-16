@@ -51,9 +51,15 @@ using namespace std;
 
 static const int MAX_BUF_LEN = 20480;
 static const int MTU = 1500;
-static char *TUN_DEV = "tun21";
+static const char *TUN_DEV = "tun21";
 int tunmtu = MTU;
+char ca[512];
 char crl[512];
+bool verifyClient = false;
+
+static const int MAX_TUN_QUEUE_SIZE = 8;
+int tunQueueSize = 1;
+int fds[MAX_TUN_QUEUE_SIZE];
 
 static bool GLOBAL_MODE = false;
 static bool OPEN_PROXY = false;
@@ -100,6 +106,7 @@ int tunEpollFd;
 struct Channel
 {
     int fd_;
+    int tfd_;
     SSL *ssl_;
     bool tcpConnected_;
     bool sslConnected_;
@@ -123,6 +130,7 @@ struct Channel
     {
         memset(this, 0, sizeof *this);
         fd_ = fd;
+        tfd_ = 0;
         events_ = events;
         next = NULL;
         next_len = 0;
@@ -143,6 +151,10 @@ struct Channel
     void setVip(char *vip)
     {
         memcpy(vip_, vip, strlen(vip));
+    }
+    void setTFd(int tfd)
+    {
+        this->tfd_ = tfd;
     }
     ~Channel()
     {
@@ -306,6 +318,16 @@ void handleHandshake(Channel *ch)
     {
         showClientCerts(ch->ssl_);
         ch->sslConnected_ = true;
+        // 网卡多队列模式下为每一个客户端分配一个tunfd
+        if (tunQueueSize > 1)
+        {
+            int mod = ch->fd_ % tunQueueSize;
+            ch->tfd_ = fds[mod];
+        }
+        else
+        {
+            ch->tfd_ = tunfd;
+        }
         log("new ssl: %p for fd: %d\n", ch->ssl_, ch->fd_);
         // 建立和上游的tcp连接
         if (OPEN_PROXY)
@@ -411,7 +433,8 @@ void SslDataRead(Channel *ch)
             if (memcmp(packet, RECORD_TYPE_DATA, RECORD_TYPE_LABEL_LEN) == 0) // vpn数据
             {
                 /* 3、写入到虚拟网卡 */
-                int wlen = write(tunfd, packet + RECORD_HEADER_LEN, datalen);
+                // int wlen = write(tunfd, packet + RECORD_HEADER_LEN, datalen);
+                int wlen = write(ch->tfd_, packet + RECORD_HEADER_LEN, datalen);
                 if (wlen < datalen)
                 {
                     log("虚拟网卡写入数据长度小于预期长度, write len: %d, buffer len: %d\n", wlen, len);
@@ -536,9 +559,8 @@ static int verify_callback(int preverify_ok, X509_STORE_CTX *x509_ctx)
 void initSSL()
 {
     int r;
-    bool verifyClient = false;
     bool useTLS13 = false;
-    string ca = "certs/ca.crt", signcert = "certs/signcert.crt", singkey = "certs/signkey.key", enccert = "certs/enccert.crt", enckey = "certs/enckey.key";
+    string signcert = "certs/signcert.crt", singkey = "certs/signkey.key", enccert = "certs/enccert.crt", enckey = "certs/enckey.key";
     string cert = "certs/server.pem", key = "certs/server.pem";
     SSL_load_error_strings();
     r = SSL_library_init();
@@ -573,11 +595,11 @@ void initSSL()
         printf("need verify client\n");
         SSL_CTX_set_verify(g_sslCtx, SSL_VERIFY_PEER, verify_callback); // 验证客户端证书回调；
         // SSL_CTX_set_verify_depth(g_sslCtx, 0);
-        r = SSL_CTX_load_verify_locations(g_sslCtx, ca.c_str(), NULL);
-        check0(r <= 0, "SSL_CTX_load_verify_locations %s failed", ca.c_str());
+        r = SSL_CTX_load_verify_locations(g_sslCtx, ca, NULL);
+        check0(r <= 0, "SSL_CTX_load_verify_locations %s failed", ca);
         ERR_clear_error();
-        STACK_OF(X509_NAME) *list = SSL_load_client_CA_file(ca.c_str());
-        check0(list == NULL, "SSL_load_client_CA_file %s failed", ca.c_str());
+        STACK_OF(X509_NAME) *list = SSL_load_client_CA_file(ca);
+        check0(list == NULL, "SSL_load_client_CA_file %s failed", ca);
         SSL_CTX_set_client_CA_list(g_sslCtx, list);
     }
     else
@@ -601,7 +623,7 @@ void initSSL()
         check0(store == NULL, "X509_LOOKUP_load_file(\"%s\") failed", crl);
 
         X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK | X509_V_FLAG_CRL_CHECK_ALL);
-        printf("local crl finish\n");
+        printf("load crl finish\n");
     }
 
     // 加载sm2证书
@@ -874,37 +896,33 @@ void initTun(unsigned int mtu, const char *ipv4, const char *netmask)
     strcpy(tunCfg.ipv4, inet_ntoa(var_ip));
     strcpy(tunCfg.ipv4_net, vipPool.ipv4_net);
 
-    // 创建虚拟网卡
-    tunfd = tun_create(&tunCfg);
-    check0(tunfd <= 0, "create tun fd fail: %d", tunfd);
-    // 创建server tun读取线程
-    pthread_t serverTunThread;
-    ret = pthread_create(&serverTunThread, NULL, server_tun_thread, &tunfd);
-    check0(ret != 0, "create server tun thread fail: %d", ret);
-
-    // // 创建多队列虚拟网卡
-    // struct epoll_event ev;
-    // int size = 1;
-    // int fds[size];
-    // // 指明虚拟网卡名称
-    // strncpy(tunCfg.dev, TUN_DEV, sizeof(tunCfg.dev));
-    // ret = tun_create_mq(&tunCfg, size, fds);
-    // check0(ret != 0, "create multi queue tun fail: %d", ret);
-    // for (i = 0; i < size; i++)
-    // {
-    //     tun_set_queue(fds[i], 1);
-    // }
-    // tunfd = fds[0];
-    // tunfd2 = fds[1];
-
-    // 创建server tun读取线程
+    // // 创建单队列虚拟网卡
+    // tunfd = tun_create(&tunCfg);
+    // check0(tunfd <= 0, "create tun fd fail: %d", tunfd);
+    // // 创建server tun读取线程
     // pthread_t serverTunThread;
     // ret = pthread_create(&serverTunThread, NULL, server_tun_thread, &tunfd);
     // check0(ret != 0, "create server tun thread fail: %d", ret);
+
+    // 创建多队列虚拟网卡
+    // 指明虚拟网卡名称
+    strncpy(tunCfg.dev, TUN_DEV, sizeof(tunCfg.dev));
+    ret = tun_create_mq(&tunCfg, tunQueueSize, fds);
+    check0(ret != 0, "create multi queue tun fail: %d", ret);
+    for (i = 0; i < tunQueueSize; i++)
+    {
+        tun_set_queue(fds[i], 1);
+    }
+
+    // 为每个tunfd创建server tun读取线程
+    pthread_t serverTunThread;
+    ret = pthread_create(&serverTunThread, NULL, server_tun_thread, &tunfd);
+    check0(ret != 0, "create server tun thread fail: %d", ret);
     // ret = pthread_create(&serverTunThread, NULL, server_tun_thread, &tunfd2);
     // check0(ret != 0, "create server tun thread2 fail: %d", ret);
 
-    // // 创建epoll
+    // // 使用epoll模式读取多队列网卡数据
+    // struct epoll_event ev;
     // tunEpollFd = epoll_create1(EPOLL_CLOEXEC);
     // memset(&ev, 0, sizeof(ev));
     // ev.events = EPOLLIN | EPOLLET; // Read events with edge-triggered mode;
@@ -977,6 +995,7 @@ int allocateVip(char *ip, unsigned int *ipLen)
         }
         vipCycleIndex++;
     }
+    return 0;
 }
 
 int pushTunConf(Channel *ch)
@@ -1042,10 +1061,12 @@ void usage(void)
     fprintf(stderr, "-p: 服务运行端口, 默认: 1443\n");
     fprintf(stderr, "-i: 虚拟网络ip地址, 默认: 10.12.9.0\n");
     fprintf(stderr, "-m: 虚拟网络掩码, 默认: 255.255.255.0\n");
-    fprintf(stderr, "-u: 虚拟网卡mtu值, 例如: 1500\n");
+    fprintf(stderr, "-u: 虚拟网卡mtu值, 例如: 1500, 1500 <= mtu <= 1500\n");
+    fprintf(stderr, "-c: 开启客户端验证模式, 开启后必须配置客户端ca证书\n");
+    fprintf(stderr, "-a: 客户端ca证书文件, 打开验证客户端模式下生效\n");
     fprintf(stderr, "-g: 开启客户端全代理模式\n");
     fprintf(stderr, "-x: 使用代理服务并设置代理服务ip和端口,例如: 127.0.0.1:9112\n");
-    fprintf(stderr, "-l: 使用代理服务并设置代理服务ip和端口,例如: 127.0.0.1:9112\n");
+    fprintf(stderr, "-l: 配置吊销证书列表crl路径, 例如: /crl/path/crl\n");
     fprintf(stderr, "-h: 使用帮助\n");
     exit(1);
 }
@@ -1071,7 +1092,7 @@ int main(int argc, char **argv)
     strncpy(vmask, defaultVmask, sizeof(vmask));
 
     /* Check command line options */
-    while ((option = getopt(argc, argv, "i:m:p:u:x:l:h")) > 0)
+    while ((option = getopt(argc, argv, "p:i:m:u:gcx:l:h")) > 0)
     {
         switch (option)
         {
@@ -1090,13 +1111,25 @@ int main(int argc, char **argv)
             tunmtu = atoi(optarg);
             break;
         case 'g':
-            OPEN_PROXY = true;
+            GLOBAL_MODE = true;
+            break;
+        case 'c':
+            verifyClient = true;
+            break;
+        case 'a':
+            strncpy(ca, optarg, sizeof(ca));
+            if (access(ca, F_OK) != 0)
+            {
+                printf("ca证书文件不存在\n");
+                usage();
+            }
             break;
         case 'x':
             strncpy(proxyaddr, optarg, sizeof(proxyaddr));
-            split = strtok(proxyaddr, ":");
+            split = strstr(proxyaddr, ":");
             if (split == NULL)
             {
+                printf("代理服务器配置错误\n");
                 usage();
             }
             *split = '\0';
@@ -1106,6 +1139,11 @@ int main(int argc, char **argv)
             break;
         case 'l':
             strncpy(crl, optarg, sizeof(crl));
+            if (access(crl, F_OK) != 0)
+            {
+                printf("证书吊销列表文件不存在\n");
+                usage();
+            }
             break;
         case 'h':
             usage();
@@ -1136,6 +1174,11 @@ int main(int argc, char **argv)
     if (*vip == '\0' || *vmask == '\0')
     {
         printf("虚拟网络设置错误, 请同时设置vip与vmask\n");
+        usage();
+    }
+    if (verifyClient && access(ca, F_OK) != 0)
+    {
+        printf("ca证书文件不存在\n");
         usage();
     }
 
