@@ -206,7 +206,25 @@ int main(int argc, char **argv)
         if (len <= 0)
         {
             printf("消息接收失败！错误代码是%d, 错误信息是'%s'\n", errno, strerror(errno));
-            goto finish;
+            int ssle = SSL_get_error(ssl, len);
+            if (len < 0 && ssle != SSL_ERROR_WANT_READ)
+            {
+                if (errno != EAGAIN)
+                {
+                    printf("SSL_read return %d, error: %d, errno: %d, msg: %s\n", len, ssle, errno, strerror(errno));
+                    goto finish;
+                }
+                continue;
+            }
+            if (len == 0)
+            {
+                if (ssle == SSL_ERROR_ZERO_RETURN)
+                    printf("SSL has been shutdown.\n");
+                else
+                    printf("Connection has been aborted.\n");
+                goto finish;
+            }
+            continue;
         }
 
         // 2、对数据进行解包
@@ -298,6 +316,7 @@ static void *client_tun_thread(void *arg)
         if (len <= 0)
         {
             printf("消息'%s'发送失败! 错误代码是%d, 错误信息是'%s'\n", buf, errno, strerror(errno));
+            // TODO 需要重新发送
         }
         bzero(buf, MAX_BUF_SIZE + 1);
     }

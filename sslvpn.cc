@@ -364,7 +364,7 @@ void handleHandshake(Channel *ch)
                 else
                 {
                     log("连接代理服务失败: %d\n", proxyFd);
-                    // TODO
+                    // TODO 指定策略
                 }
             }
         }
@@ -403,13 +403,16 @@ void proxyDataRead(Channel *ch)
 {
     int readlen = 0;
 
+    // 读取上游发送的数据
     readlen = recv(ch->fd_, ch->buf, sizeof(ch->buf), 0);
     if (readlen > 0)
     {
+        // 向下游客户端发送
         int writelen = SSL_write(ch->ssl_, ch->buf, readlen);
         if (writelen < readlen)
         {
             log("SSL[%p]写入代理响应数据长度过小 -> proxy resp len: %d, write len: %d\n", ch->ssl_, readlen, writelen);
+            // TODO 需要重新发送
         }
     }
     else
@@ -452,6 +455,7 @@ void SslDataRead(Channel *ch)
                 if (wlen < datalen)
                 {
                     log("虚拟网卡写入数据长度小于预期长度, write len: %d, buffer len: %d\n", wlen, len);
+                    // TODO 网卡数据写失败处理
                 }
             }
             else if (memcmp(packet, RECORD_TYPE_AUTH, RECORD_TYPE_LABEL_LEN) == 0) // 认证数据
