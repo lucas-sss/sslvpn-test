@@ -228,9 +228,13 @@ void addEpollFd(int epollfd, Channel *ch)
 
 int createServer(short port)
 {
-    int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    int ret = 0;
     int enable = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable));
+    int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    ret = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable));
+    check0(r, "set SO_REUSEADDR failed\n");
+    ret = setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &enable, sizeof(enable));
+    check0(r, "set SO_REUSEPORT failed\n");
     setNonBlock(fd, 1);
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof addr);
@@ -267,7 +271,7 @@ void handleAccept()
             continue;
         }
         setNonBlock(cfd, 1);
-        Channel *ch = new Channel(cfd, EPOLLIN | EPOLLOUT, false);
+        Channel *ch = new Channel(cfd, EPOLLIN | EPOLLOUT | EPOLLONESHOT, false); // 加上EPOLLONESHOT ，一个socket就只有一个thread处理
         addEpollFd(epollfd, ch);
     }
 }
@@ -742,7 +746,6 @@ void *server_tun_thread(void *arg)
         enpack(RECORD_TYPE_DATA, buf, ret_length, packet, &enpack_len);
 
         // 5、发消息给客户端
-        // int len = SSL_write(session->clientSslCache->ssl, buf, ret_length);
         int len = SSL_write(ssl, packet, enpack_len);
         if (len <= 0)
         {
@@ -893,6 +896,42 @@ int netmask2prefixlen(const char *ip_str)
     return cnt;
 }
 
+/**
+ * @brief 根据ip配置生成tun网卡配置文件
+ *
+ * @param tunCfg
+ * @param mtu
+ * @param ipv4
+ * @param netmask
+ */
+void generateTunConfig(TUNCONFIG_T *tunCfg, unsigned int mtu, const char *ipv4, const char *netmask)
+{
+    int ret = 0;
+    struct in_addr var_ip;
+
+    // 解析虚拟ip池
+    memset(&vipPool, 0, sizeof(vip_pool));
+    ret = parseVipPool(ipv4, netmask, &vipPool);
+    check0(ret, "parse vip pool fail: %d", ret);
+
+    sprintf(vipPool.ipv4_net, "%s/%d", ipv4, netmask2prefixlen(netmask));
+    var_ip.s_addr = htonl(vipPool.sVip);
+
+    memset(&tunCfg, 0, sizeof(TUNCONFIG_T));
+    tunCfg.mtu = mtu;
+    strcpy(tunCfg.ipv4, inet_ntoa(var_ip));
+    strcpy(tunCfg.ipv4_net, vipPool.ipv4_net);
+    // 指明虚拟网卡名称
+    strncpy(tunCfg.dev, tunname, sizeof(tunCfg.dev));
+}
+
+/**
+ * @brief 单进程模式下初始化虚拟网卡（包括配置网卡和启动网卡数据读取线程）
+ *
+ * @param mtu
+ * @param ipv4
+ * @param netmask
+ */
 void initTun(unsigned int mtu, const char *ipv4, const char *netmask)
 {
     int i, ret = 0;
@@ -929,7 +968,6 @@ void initTun(unsigned int mtu, const char *ipv4, const char *netmask)
     {
         tun_set_queue(fds[i], 1);
     }
-
     // 为每个tunfd创建server tun读取线程
     pthread_t serverTunThread;
     ret = pthread_create(&serverTunThread, NULL, server_tun_thread, &tunfd);
@@ -937,7 +975,7 @@ void initTun(unsigned int mtu, const char *ipv4, const char *netmask)
     // ret = pthread_create(&serverTunThread, NULL, server_tun_thread, &tunfd2);
     // check0(ret != 0, "create server tun thread2 fail: %d", ret);
 
-    // // 使用epoll模式读取多队列网卡数据
+    // // 使用epoll模式读取多队列网卡数据, 此模式下暂未测试通过
     // struct epoll_event ev;
     // tunEpollFd = epoll_create1(EPOLL_CLOEXEC);
     // memset(&ev, 0, sizeof(ev));
@@ -1092,6 +1130,7 @@ void usage(void)
 int main(int argc, char **argv)
 {
     int option;
+    int pid, i;
     int port = 1443;
     const char *defaultVip = "10.12.9.0";
     const char *defaultVmask = "255.255.255.0";
@@ -1213,14 +1252,34 @@ int main(int argc, char **argv)
         strcpy(tunname, TUN_DEV);
     }
 
+    // 创建并配置虚拟网卡
+    initTun(tunmtu, vip, vmask);
+
+    i = 0;
+    while (i < 2)
+    {
+        pid = fork();
+        if (!pid)
+        {
+            break;
+        }
+        i++;
+    }
+    if (!pid)
+    {
+        printf("I'm the %d child process.\n", i + 1);
+    }
+    else if (pid > 0)
+    {
+        printf("I'm the parent process %d.\n", i);
+        // 配置虚拟网卡ip
+    }
+
     // 初始化ssl
     initSSL();
 
     // 创建程序epollfd
     epollfd = epoll_create1(EPOLL_CLOEXEC);
-
-    // 创建并配置虚拟网卡
-    initTun(tunmtu, vip, vmask);
 
     // 创建服务监听端口
     listenfd = createServer(port);

@@ -71,6 +71,65 @@ extern "C"
         return 0;
     }
 
+    /**
+     * @brief 使用多队列模式创建虚拟网卡
+     *
+     * @param tunCfg
+     * @param queues
+     * @param fds
+     * @return int
+     */
+    int tun_create_mq_mode(char *dev, int *fds)
+    {
+        struct ifreq ifr;
+        int fd, err, i;
+
+        if (!dev || *dev == '\0')
+        {
+            return -1;
+        }
+
+        memset(&ifr, 0, sizeof(ifr));
+        /* Flags: IFF_TUN   - TUN device (no Ethernet headers)
+         *        IFF_TAP   - TAP device
+         *
+         *        IFF_NO_PI - Do not provide packet information
+         *        IFF_MULTI_QUEUE - Create a queue of multiqueue device
+         */
+        ifr.ifr_flags = IFF_TUN | IFF_NO_PI | IFF_MULTI_QUEUE;
+        strcpy(ifr.ifr_name, dev);
+
+        if ((fd = open("/dev/net/tun", O_RDWR)) < 0)
+        {
+            goto err;
+        }
+        err = ioctl(fd, TUNSETIFF, (void *)&ifr);
+        if (err)
+        {
+            close(fd);
+            goto err;
+        }
+        printf("alloc tun fd: %d\n", fd);
+        *fds = fd;
+
+        return 0;
+    err:
+        printf("tun_create_mq fail, err: %d\n", err);
+        for (--i; i >= 0; i--)
+        {
+            close(fds[i]);
+        }
+        return err;
+    }
+
+    /**
+     * @brief 创建多队列虚拟网卡
+     *
+     * @param tunCfg
+     * @param queues 队列个数
+     * @param fds    多队列fd返回地址
+     * @return int
+     */
     int tun_create_mq(TUNCONFIG_T *tunCfg, int queues, int *fds)
     {
         struct ifreq ifr;
