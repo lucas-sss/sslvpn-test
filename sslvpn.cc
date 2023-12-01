@@ -929,6 +929,7 @@ void initTun(unsigned int mtu, const char *ipv4, const char *netmask)
     {
         tun_set_queue(fds[i], 1);
     }
+    tunfd = fds[0];
 
     // 为每个tunfd创建server tun读取线程
     pthread_t serverTunThread;
@@ -1078,7 +1079,7 @@ void usage(void)
     fprintf(stderr, "-p: 服务运行端口, 默认: 1443\n");
     fprintf(stderr, "-i: 虚拟网络ip地址, 默认: 10.12.9.0\n");
     fprintf(stderr, "-m: 虚拟网络掩码, 默认: 255.255.255.0\n");
-    fprintf(stderr, "-u: 虚拟网卡mtu值, 例如: 1500, 1500 <= mtu <= 1500\n");
+    fprintf(stderr, "-u: 虚拟网卡mtu值, 例如: 1500, 1500 <= mtu <= 15000\n");
     fprintf(stderr, "-c: 开启客户端验证模式, 开启后必须配置客户端ca证书\n");
     fprintf(stderr, "-a: 客户端ca证书文件, 打开验证客户端模式下生效\n");
     fprintf(stderr, "-g: 开启客户端全代理模式\n");
