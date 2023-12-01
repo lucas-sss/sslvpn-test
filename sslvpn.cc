@@ -105,7 +105,7 @@ int tunfd;
 int tunfd2;
 int tunEpollFd;
 
-void log_debug(char *msg, ...)
+void log_debug(const char *msg, ...)
 {
     va_list argp;
 
