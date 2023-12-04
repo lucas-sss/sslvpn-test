@@ -100,7 +100,7 @@ SSL_CTX *g_sslCtx;
 
 int epollfd, listenfd;
 
-// 虚拟网卡设备fd
+// 默认虚拟网卡设备fd
 int tunfd;
 int tunfd2;
 int tunEpollFd;
@@ -201,6 +201,13 @@ struct Channel
 
 int pushTunConf(Channel *ch);
 
+/**
+ * @brief 设置fd为非阻塞fd
+ *
+ * @param fd
+ * @param value
+ * @return int
+ */
 int setNonBlock(int fd, bool value)
 {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -215,6 +222,12 @@ int setNonBlock(int fd, bool value)
     return fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
 }
 
+/**
+ * @brief 向epoll fd中添加监听事件
+ *
+ * @param epollfd
+ * @param ch
+ */
 void addEpollFd(int epollfd, Channel *ch)
 {
     struct epoll_event ev;
@@ -226,6 +239,12 @@ void addEpollFd(int epollfd, Channel *ch)
     check0(r, "epoll_ctl add failed[%d], %s", errno, strerror(errno));
 }
 
+/**
+ * @brief 创建服务端fd（入口fd）
+ *
+ * @param port
+ * @return int
+ */
 int createServer(short port)
 {
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
@@ -245,6 +264,10 @@ int createServer(short port)
     return fd;
 }
 
+/**
+ * @brief 接收tcp连接
+ *
+ */
 void handleAccept()
 {
     struct sockaddr_in raddr;
@@ -272,6 +295,11 @@ void handleAccept()
     }
 }
 
+/**
+ * @brief 打印客户端证书
+ *
+ * @param ssl
+ */
 void showClientCerts(SSL *ssl)
 {
     X509 *cert;
@@ -295,6 +323,11 @@ void showClientCerts(SSL *ssl)
     }
 }
 
+/**
+ * @brief ssl握手处理
+ *
+ * @param ch
+ */
 void handleHandshake(Channel *ch)
 {
     if (!ch->tcpConnected_)
@@ -399,6 +432,11 @@ void handleHandshake(Channel *ch)
     }
 }
 
+/**
+ * @brief 读取代理数据
+ *
+ * @param ch
+ */
 void proxyDataRead(Channel *ch)
 {
     int readlen = 0;
@@ -421,6 +459,11 @@ void proxyDataRead(Channel *ch)
     }
 }
 
+/**
+ * @brief 读取ssl数据
+ *
+ * @param ch
+ */
 void SslDataRead(Channel *ch)
 {
     int ret = 0;
@@ -522,37 +565,59 @@ void SslDataRead(Channel *ch)
     }
 }
 
+/**
+ * @brief 服务端socket数据读取处理逻辑
+ *
+ * @param ch
+ */
 void handleRead(Channel *ch)
 {
     if (ch->fd_ == listenfd)
     {
+        // fd为主程序fd，则进行tcp连接握手处理
         return handleAccept();
     }
     if (!ch->isproxy_)
     {
         if (ch->sslConnected_)
         {
+            // 已完成ssl握手，读取ssl数
             return SslDataRead(ch);
         }
+        // 未完成ssl握手，继续进行ssl握手处理
         handleHandshake(ch);
     }
     else
     {
+        // 是代理fd，这进行代理fd数据读取
         proxyDataRead(ch);
     }
 }
 
+/**
+ * @brief 服务端socket数据写入处理逻辑
+ *
+ * @param ch
+ */
 void handleWrite(Channel *ch)
 {
     if (!ch->sslConnected_)
     {
+        // 这里主要在ssl握手未完成前由服务端主动处理ssl握手逻辑
         return handleHandshake(ch);
     }
-    // log("handle write fd %d\n", ch->fd_);
+    // 握手完成后不在监听数据可写入事件（频繁触发影响性能）
     ch->events_ &= ~EPOLLOUT;
     ch->update();
 }
 
+/**
+ * @brief ssl证书校验回调
+ *
+ * @param preverify_ok
+ * @param x509_ctx
+ * @return int
+ */
 static int verify_callback(int preverify_ok, X509_STORE_CTX *x509_ctx)
 {
     SSL *ssl;
@@ -576,6 +641,10 @@ static int verify_callback(int preverify_ok, X509_STORE_CTX *x509_ctx)
     return preverify_ok;
 }
 
+/**
+ * @brief 初始化ssl
+ *
+ */
 void initSSL()
 {
     int r;
@@ -671,6 +740,12 @@ void initSSL()
 
 int g_stop = 0;
 
+/**
+ * @brief 服务端主循环处理逻辑（进行ssl握手或者读取ssl数据）
+ *
+ * @param epollfd
+ * @param waitms
+ */
 void loop_once(int epollfd, int waitms)
 {
     const int kMaxEvents = 10240;
@@ -700,6 +775,12 @@ void handleInterrupt(int sig)
     g_stop = true;
 }
 
+/**
+ * @brief 服务端虚拟网卡数据读取线程
+ *
+ * @param arg
+ * @return void*
+ */
 void *server_tun_thread(void *arg)
 {
     int *tfd = (int *)arg;
@@ -754,7 +835,7 @@ void *server_tun_thread(void *arg)
 }
 
 /**
- * @brief 功能暂时不可用
+ * @brief 服务端多队列网卡读取（功能暂时不可用）
  *
  * @param arg
  * @return void*
@@ -827,6 +908,14 @@ char *ipInt2String(int ip_addr)
     return inet_ntoa(var_ip);
 }
 
+/**
+ * @brief 解析虚拟ip池参数配置
+ *
+ * @param netIp     ip网络地址
+ * @param netMask   子网掩码
+ * @param vp        解析后ip参数
+ * @return int
+ */
 int parseVipPool(const char *netIp, const char *netMask, vip_pool *vp)
 {
     unsigned long ip, mask, mask2;
@@ -893,6 +982,13 @@ int netmask2prefixlen(const char *ip_str)
     return cnt;
 }
 
+/**
+ * @brief 初始化虚拟网卡
+ *
+ * @param mtu
+ * @param ipv4
+ * @param netmask
+ */
 void initTun(unsigned int mtu, const char *ipv4, const char *netmask)
 {
     int i, ret = 0;
@@ -957,7 +1053,7 @@ void initTun(unsigned int mtu, const char *ipv4, const char *netmask)
 }
 
 /**
- * @brief
+ * @brief 从虚拟ip池中申请一个虚拟ip
  *
  * @param ip
  * @param ipLen
@@ -1015,6 +1111,12 @@ int allocateVip(char *ip, unsigned int *ipLen)
     return 0;
 }
 
+/**
+ * @brief 向客户端推送网卡配置
+ *
+ * @param ch
+ * @return int
+ */
 int pushTunConf(Channel *ch)
 {
     int ret, writeLen = 0;
