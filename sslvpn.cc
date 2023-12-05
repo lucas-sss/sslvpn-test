@@ -100,12 +100,12 @@ SSL_CTX *g_sslCtx;
 
 int epollfd, listenfd;
 
-// 虚拟网卡设备fd
+// 默认虚拟网卡设备fd
 int tunfd;
 int tunfd2;
 int tunEpollFd;
 
-void log_debug(char *msg, ...)
+void log_debug(const char *msg, ...)
 {
     va_list argp;
 
@@ -201,6 +201,13 @@ struct Channel
 
 int pushTunConf(Channel *ch);
 
+/**
+ * @brief 设置fd为非阻塞fd
+ *
+ * @param fd
+ * @param value
+ * @return int
+ */
 int setNonBlock(int fd, bool value)
 {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -215,6 +222,12 @@ int setNonBlock(int fd, bool value)
     return fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
 }
 
+/**
+ * @brief 向epoll fd中添加监听事件
+ *
+ * @param epollfd
+ * @param ch
+ */
 void addEpollFd(int epollfd, Channel *ch)
 {
     struct epoll_event ev;
@@ -226,29 +239,39 @@ void addEpollFd(int epollfd, Channel *ch)
     check0(r, "epoll_ctl add failed[%d], %s", errno, strerror(errno));
 }
 
+/**
+ * @brief 创建服务端fd（入口fd）
+ *
+ * @param port
+ * @return int
+ */
 int createServer(short port)
 {
     int ret = 0;
     int enable = 1;
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     ret = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable));
-    check0(r, "set SO_REUSEADDR failed\n");
+    check0(ret, "set SO_REUSEADDR failed\n");
     ret = setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &enable, sizeof(enable));
-    check0(r, "set SO_REUSEPORT failed\n");
+    check0(ret, "set SO_REUSEPORT failed\n");
     setNonBlock(fd, 1);
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof addr);
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
     addr.sin_addr.s_addr = INADDR_ANY;
-    int r = ::bind(fd, (struct sockaddr *)&addr, sizeof(struct sockaddr));
-    check0(r, "bind to 0.0.0.0:%d failed %d %s", port, errno, strerror(errno));
-    r = listen(fd, 20);
-    check0(r, "listen failed %d %s", errno, strerror(errno));
+    ret = ::bind(fd, (struct sockaddr *)&addr, sizeof(struct sockaddr));
+    check0(ret, "bind to 0.0.0.0:%d failed %d %s", port, errno, strerror(errno));
+    ret = listen(fd, 20);
+    check0(ret, "listen failed %d %s", errno, strerror(errno));
     log("create server fd[%d] listening at %d\n", fd, port);
     return fd;
 }
 
+/**
+ * @brief 接收tcp连接
+ *
+ */
 void handleAccept()
 {
     struct sockaddr_in raddr;
@@ -276,6 +299,11 @@ void handleAccept()
     }
 }
 
+/**
+ * @brief 打印客户端证书
+ *
+ * @param ssl
+ */
 void showClientCerts(SSL *ssl)
 {
     X509 *cert;
@@ -299,6 +327,11 @@ void showClientCerts(SSL *ssl)
     }
 }
 
+/**
+ * @brief ssl握手处理
+ *
+ * @param ch
+ */
 void handleHandshake(Channel *ch)
 {
     if (!ch->tcpConnected_)
@@ -403,6 +436,11 @@ void handleHandshake(Channel *ch)
     }
 }
 
+/**
+ * @brief 读取代理数据
+ *
+ * @param ch
+ */
 void proxyDataRead(Channel *ch)
 {
     int readlen = 0;
@@ -425,6 +463,11 @@ void proxyDataRead(Channel *ch)
     }
 }
 
+/**
+ * @brief 读取ssl数据
+ *
+ * @param ch
+ */
 void SslDataRead(Channel *ch)
 {
     int ret = 0;
@@ -526,37 +569,59 @@ void SslDataRead(Channel *ch)
     }
 }
 
+/**
+ * @brief 服务端socket数据读取处理逻辑
+ *
+ * @param ch
+ */
 void handleRead(Channel *ch)
 {
     if (ch->fd_ == listenfd)
     {
+        // fd为主程序fd，则进行tcp连接握手处理
         return handleAccept();
     }
     if (!ch->isproxy_)
     {
         if (ch->sslConnected_)
         {
+            // 已完成ssl握手，读取ssl数
             return SslDataRead(ch);
         }
+        // 未完成ssl握手，继续进行ssl握手处理
         handleHandshake(ch);
     }
     else
     {
+        // 是代理fd，这进行代理fd数据读取
         proxyDataRead(ch);
     }
 }
 
+/**
+ * @brief 服务端socket数据写入处理逻辑
+ *
+ * @param ch
+ */
 void handleWrite(Channel *ch)
 {
     if (!ch->sslConnected_)
     {
+        // 这里主要在ssl握手未完成前由服务端主动处理ssl握手逻辑
         return handleHandshake(ch);
     }
-    // log("handle write fd %d\n", ch->fd_);
+    // 握手完成后不在监听数据可写入事件（频繁触发影响性能）
     ch->events_ &= ~EPOLLOUT;
     ch->update();
 }
 
+/**
+ * @brief ssl证书校验回调
+ *
+ * @param preverify_ok
+ * @param x509_ctx
+ * @return int
+ */
 static int verify_callback(int preverify_ok, X509_STORE_CTX *x509_ctx)
 {
     SSL *ssl;
@@ -580,6 +645,10 @@ static int verify_callback(int preverify_ok, X509_STORE_CTX *x509_ctx)
     return preverify_ok;
 }
 
+/**
+ * @brief 初始化ssl
+ *
+ */
 void initSSL()
 {
     int r;
@@ -675,6 +744,12 @@ void initSSL()
 
 int g_stop = 0;
 
+/**
+ * @brief 服务端主循环处理逻辑（进行ssl握手或者读取ssl数据）
+ *
+ * @param epollfd
+ * @param waitms
+ */
 void loop_once(int epollfd, int waitms)
 {
     const int kMaxEvents = 10240;
@@ -704,6 +779,12 @@ void handleInterrupt(int sig)
     g_stop = true;
 }
 
+/**
+ * @brief 服务端虚拟网卡数据读取线程
+ *
+ * @param arg
+ * @return void*
+ */
 void *server_tun_thread(void *arg)
 {
     int *tfd = (int *)arg;
@@ -757,7 +838,7 @@ void *server_tun_thread(void *arg)
 }
 
 /**
- * @brief 功能暂时不可用
+ * @brief 服务端多队列网卡读取（功能暂时不可用）
  *
  * @param arg
  * @return void*
@@ -830,6 +911,14 @@ char *ipInt2String(int ip_addr)
     return inet_ntoa(var_ip);
 }
 
+/**
+ * @brief 解析虚拟ip池参数配置
+ *
+ * @param netIp     ip网络地址
+ * @param netMask   子网掩码
+ * @param vp        解析后ip参数
+ * @return int
+ */
 int parseVipPool(const char *netIp, const char *netMask, vip_pool *vp)
 {
     unsigned long ip, mask, mask2;
@@ -918,15 +1007,16 @@ void generateTunConfig(TUNCONFIG_T *tunCfg, unsigned int mtu, const char *ipv4, 
     var_ip.s_addr = htonl(vipPool.sVip);
 
     memset(&tunCfg, 0, sizeof(TUNCONFIG_T));
-    tunCfg.mtu = mtu;
-    strcpy(tunCfg.ipv4, inet_ntoa(var_ip));
-    strcpy(tunCfg.ipv4_net, vipPool.ipv4_net);
+    tunCfg->mtu = mtu;
+    strcpy(tunCfg->ipv4, inet_ntoa(var_ip));
+    strcpy(tunCfg->ipv4_net, vipPool.ipv4_net);
     // 指明虚拟网卡名称
-    strncpy(tunCfg.dev, tunname, sizeof(tunCfg.dev));
+    strncpy(tunCfg->dev, tunname, sizeof(tunCfg->dev));
 }
 
 /**
  * @brief 单进程模式下初始化虚拟网卡（包括配置网卡和启动网卡数据读取线程）
+ * @brief 初始化虚拟网卡
  *
  * @param mtu
  * @param ipv4
@@ -951,31 +1041,35 @@ void initTun(unsigned int mtu, const char *ipv4, const char *netmask)
     strcpy(tunCfg.ipv4, inet_ntoa(var_ip));
     strcpy(tunCfg.ipv4_net, vipPool.ipv4_net);
 
-    // // 创建单队列虚拟网卡
-    // tunfd = tun_create(&tunCfg);
-    // check0(tunfd <= 0, "create tun fd fail: %d", tunfd);
-    // // 创建server tun读取线程
-    // pthread_t serverTunThread;
-    // ret = pthread_create(&serverTunThread, NULL, server_tun_thread, &tunfd);
-    // check0(ret != 0, "create server tun thread fail: %d", ret);
-
-    // 创建多队列虚拟网卡
-    // 指明虚拟网卡名称
-    strncpy(tunCfg.dev, tunname, sizeof(tunCfg.dev));
-    ret = tun_create_mq(&tunCfg, tunQueueSize, fds);
-    check0(ret != 0, "create multi queue tun fail: %d", ret);
-    for (i = 0; i < tunQueueSize; i++)
-    {
-        tun_set_queue(fds[i], 1);
-    }
-    // 为每个tunfd创建server tun读取线程
+    // 创建单队列虚拟网卡
+    tunfd = tun_create(&tunCfg);
+    check0(tunfd <= 0, "create tun fd fail: %d", tunfd);
+    // 创建server tun读取线程
     pthread_t serverTunThread;
     ret = pthread_create(&serverTunThread, NULL, server_tun_thread, &tunfd);
     check0(ret != 0, "create server tun thread fail: %d", ret);
-    // ret = pthread_create(&serverTunThread, NULL, server_tun_thread, &tunfd2);
-    // check0(ret != 0, "create server tun thread2 fail: %d", ret);
 
-    // // 使用epoll模式读取多队列网卡数据, 此模式下暂未测试通过
+    /********* 创建多队列虚拟网卡 *************/
+    // // 指明虚拟网卡名称
+    // strncpy(tunCfg.dev, tunname, sizeof(tunCfg.dev));
+    // ret = tun_create_mq(&tunCfg, tunQueueSize, fds);
+    // check0(ret != 0, "create multi queue tun fail: %d", ret);
+    // for (i = 0; i < tunQueueSize; i++)
+    // {
+    //     tun_set_queue(fds[i], 1);
+    // }
+    // tunfd = fds[0];
+
+    // // 为每个tunfd创建server tun读取线程
+    // pthread_t serverTunThread;
+    // ret = pthread_create(&serverTunThread, NULL, server_tun_thread, &tunfd);
+    // check0(ret != 0, "create server tun thread fail: %d", ret);
+    // // ret = pthread_create(&serverTunThread, NULL, server_tun_thread, &tunfd2);
+    // // check0(ret != 0, "create server tun thread2 fail: %d", ret);
+    /********* 创建多队列虚拟网卡 *************/
+
+    /********* 使用epoll模式读取多队列网卡数据 *************/
+    // // 此模式下暂未测试通过
     // struct epoll_event ev;
     // tunEpollFd = epoll_create1(EPOLL_CLOEXEC);
     // memset(&ev, 0, sizeof(ev));
@@ -991,10 +1085,11 @@ void initTun(unsigned int mtu, const char *ipv4, const char *netmask)
     // pthread_t serverTunThread;
     // ret = pthread_create(&serverTunThread, NULL, server_multi_queue_tun_thread, &tunEpollFd);
     // check0(ret != 0, "create server tun thread fail: %d", ret);
+    /********* 使用epoll模式读取多队列网卡数据 *************/
 }
 
 /**
- * @brief
+ * @brief 从虚拟ip池中申请一个虚拟ip
  *
  * @param ip
  * @param ipLen
@@ -1052,6 +1147,12 @@ int allocateVip(char *ip, unsigned int *ipLen)
     return 0;
 }
 
+/**
+ * @brief 向客户端推送网卡配置
+ *
+ * @param ch
+ * @return int
+ */
 int pushTunConf(Channel *ch)
 {
     int ret, writeLen = 0;
@@ -1116,7 +1217,7 @@ void usage(void)
     fprintf(stderr, "-p: 服务运行端口, 默认: 1443\n");
     fprintf(stderr, "-i: 虚拟网络ip地址, 默认: 10.12.9.0\n");
     fprintf(stderr, "-m: 虚拟网络掩码, 默认: 255.255.255.0\n");
-    fprintf(stderr, "-u: 虚拟网卡mtu值, 例如: 1500, 1500 <= mtu <= 1500\n");
+    fprintf(stderr, "-u: 虚拟网卡mtu值, 例如: 1500, 1500 <= mtu <= 15000\n");
     fprintf(stderr, "-c: 开启客户端验证模式, 开启后必须配置客户端ca证书\n");
     fprintf(stderr, "-a: 客户端ca证书文件, 打开验证客户端模式下生效\n");
     fprintf(stderr, "-g: 开启客户端全代理模式\n");
@@ -1255,25 +1356,26 @@ int main(int argc, char **argv)
     // 创建并配置虚拟网卡
     initTun(tunmtu, vip, vmask);
 
-    i = 0;
-    while (i < 2)
-    {
-        pid = fork();
-        if (!pid)
-        {
-            break;
-        }
-        i++;
-    }
-    if (!pid)
-    {
-        printf("I'm the %d child process.\n", i + 1);
-    }
-    else if (pid > 0)
-    {
-        printf("I'm the parent process %d.\n", i);
-        // 配置虚拟网卡ip
-    }
+    // //多进程处理
+    // i = 0;
+    // while (i < 2)
+    // {
+    //     pid = fork();
+    //     if (!pid)
+    //     {
+    //         break;
+    //     }
+    //     i++;
+    // }
+    // if (!pid)
+    // {
+    //     printf("I'm the %d child process.\n", i + 1);
+    // }
+    // else if (pid > 0)
+    // {
+    //     printf("I'm the parent process %d.\n", i);
+    //     // TODO 配置虚拟网卡ip
+    // }
 
     // 初始化ssl
     initSSL();
