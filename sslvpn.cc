@@ -19,6 +19,13 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <map>
+#include <assert.h>
+#include <net/if.h>
+#include <inttypes.h>
+#include <sys/mman.h>
+#include <linux/if_packet.h>
+#include <linux/if_ether.h>
+#include <linux/ip.h>
 
 #include "tun.h"
 #include "protocol.h"
@@ -48,6 +55,30 @@ using namespace std;
             log(__VA_ARGS__); \
             exit(1);          \
     } while (0)
+
+#ifndef likely
+#define likely(x) __builtin_expect(!!(x), 1)
+#endif
+#ifndef unlikely
+#define unlikely(x) __builtin_expect(!!(x), 0)
+#endif
+
+struct block_desc
+{
+    uint32_t version;
+    uint32_t offset_to_priv;
+    struct tpacket_hdr_v1 h1;
+};
+
+struct ring
+{
+    struct iovec *rd;
+    uint8_t *map;
+    struct tpacket_req3 req;
+};
+
+static unsigned long packets_total = 0, bytes_total = 0;
+static sig_atomic_t sigint = 0;
 
 char tunname[32];
 static const int MAX_BUF_LEN = 20480;
@@ -198,6 +229,236 @@ struct Channel
         }
     }
 };
+
+/* 初始化套接字，包括套接口创建、接收缓冲区的创建等 */
+static int setup_socket(struct ring *ring, char *netdev)
+{
+    printf("setup_socket -> netdev: %s\n", netdev);
+
+    int err, i, fd, v = TPACKET_V3;
+    struct sockaddr_ll ll;
+    unsigned int blocksiz = 1 << 17, framesiz = 1 << 11;
+    unsigned int blocknum = 64;
+    int fanout_arg;
+
+    /* 创建套接口 */
+    fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+    // fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_IP));
+    if (fd < 0)
+    {
+        perror("socket");
+        exit(1);
+    }
+
+    /* 设置PACKET版本，有v1、v2和v3三个版本，默认是v1 */
+    err = setsockopt(fd, SOL_PACKET, PACKET_VERSION, &v, sizeof(v));
+    if (err < 0)
+    {
+        perror("setsockopt");
+        exit(1);
+    }
+
+    memset(&ring->req, 0, sizeof(ring->req));
+    ring->req.tp_block_size = blocksiz;
+    ring->req.tp_frame_size = framesiz;
+    ring->req.tp_block_nr = blocknum;
+    ring->req.tp_frame_nr = (blocksiz * blocknum) / framesiz;
+    // ring->req.tp_retire_blk_tov = 60;
+    // ring->req.tp_feature_req_word = TP_FT_REQ_FILL_RXHASH;
+
+    /* 创建ringBuf */
+    // err = setsockopt(fd, SOL_PACKET, PACKET_RX_RING, &ring->req, sizeof(ring->req));
+    err = setsockopt(fd, SOL_PACKET, PACKET_TX_RING, &ring->req, sizeof(ring->req));
+    if (err < 0)
+    {
+        perror("setsockopt");
+        exit(1);
+    }
+
+    /* 将ringBuf映射到用户态 */
+    ring->map = (uint8_t *)mmap(NULL, ring->req.tp_block_size * ring->req.tp_block_nr, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_LOCKED, fd, 0);
+    if (ring->map == MAP_FAILED)
+    {
+        perror("mmap");
+        exit(1);
+    }
+
+    /* 使用iovec向量的方式来访问缓冲区，为每个块创建一个向量，存储到ring->rd中 */
+    ring->rd = (struct iovec *)malloc(ring->req.tp_block_nr * sizeof(*ring->rd));
+    assert(ring->rd);
+    /* 初始化向量，使用与每个块对应 */
+    for (i = 0; i < ring->req.tp_block_nr; ++i)
+    {
+        ring->rd[i].iov_base = ring->map + (i * ring->req.tp_block_size);
+        ring->rd[i].iov_len = ring->req.tp_block_size;
+    }
+
+    memset(&ll, 0, sizeof(ll));
+    ll.sll_family = PF_PACKET;
+    ll.sll_protocol = htons(ETH_P_ALL);
+    // ll.sll_protocol = htons(ETH_P_IP);
+    ll.sll_ifindex = if_nametoindex(netdev);
+    ll.sll_hatype = 0;
+    ll.sll_pkttype = 0;
+    ll.sll_halen = 0;
+
+    /* 将这个原始套接字绑定到某个网口（netdev） */
+    err = bind(fd, (struct sockaddr *)&ll, sizeof(ll));
+    if (err < 0)
+    {
+        perror("bind");
+        exit(1);
+    }
+
+    return fd;
+}
+
+static void walk_block(struct block_desc *pbd, const int block_num)
+{
+    int num_pkts = pbd->h1.num_pkts, i;
+    unsigned long bytes = 0;
+    struct tpacket3_hdr *ppd;
+    unsigned char *enpak = NULL;
+    unsigned int enlen = 0;
+    unsigned int enlens = 0;
+    size_t len = num_pkts * (tunmtu + HEADER_LEN);
+    char ip[MAX_IPV4_STR_LEN] = {0};
+
+    log_debug("walk_block -> num_pkts: %d\n", num_pkts);
+    enpak = (unsigned char *)malloc(len);
+    if (!enpack)
+    {
+        log("walk_block -> malloc for enpak fail\n");
+        return;
+    }
+    /* 获取当前块中第一个帧 */
+    ppd = (struct tpacket3_hdr *)((uint8_t *)pbd + pbd->h1.offset_to_first_pkt);
+    for (i = 0; i < num_pkts; ++i)
+    {
+        bytes += ppd->tp_snaplen;
+        // display(ppd);
+
+        unsigned char *ipp = (uint8_t *)ppd + ppd->tp_mac;
+        size_t datalen = (size_t)ppd->tp_len;
+        unsigned char *dip = &ipp[16];
+
+        bzero(ip, MAX_IPV4_STR_LEN);
+        sprintf(ip, "%d.%d.%d.%d", dip[0], dip[1], dip[2], dip[3]);
+        log_debug("data dst ip: %s\n", ip);
+        if (DEBUG_MODE)
+        {
+            log_debug("tun read:\n");
+            dump_hex(ipp, datalen, 32);
+        }
+
+        // 进行封包处理
+        enlen = len - enlens;
+        enpack(RECORD_TYPE_DATA, ipp, datalen, enpak + enlens, &enlen);
+        enlens += enlen;
+        /* 获取下一个帧的位置 */
+        ppd = (struct tpacket3_hdr *)((uint8_t *)ppd + ppd->tp_next_offset);
+    }
+
+    // // 发送
+    // map<string, SSL *>::iterator iter = maps.find(ip);
+    // if (iter != maps.end())
+    // {
+    //     SSL *ssl = iter->second;
+    //     log_debug("find SSL[%p] for ip: %s\n", ssl, ip);
+    //     // 发消息给客户端
+    //     int ret = SSL_write(ssl, enpak, enlen);
+    //     if (ret <= 0)
+    //     {
+    //         log("SSL[%p]发送失败! 错误代码是%d, 错误信息是'%s'\n", ssl, errno, strerror(errno));
+    //     }
+    // }
+
+    packets_total += num_pkts;
+    bytes_total += bytes;
+}
+
+static void walk_block_tx(struct block_desc *pbd, const int block_num)
+{
+    int num_pkts = pbd->h1.num_pkts, i;
+    unsigned long bytes = 0;
+    struct tpacket3_hdr *ppd;
+    unsigned char *enpak = NULL;
+    unsigned int enlen = 0;
+    unsigned int enlens = 0;
+    size_t len = num_pkts * (tunmtu + HEADER_LEN);
+    char ip[MAX_IPV4_STR_LEN] = {0};
+
+    log_debug("walk_block_tx -> num_pkts: %d\n", num_pkts);
+    enpak = (unsigned char *)malloc(len);
+    if (!enpack)
+    {
+        log("walk_block_tx -> malloc for enpak fail\n");
+        return;
+    }
+    /* 获取当前块中第一个帧 */
+    ppd = (struct tpacket3_hdr *)((uint8_t *)pbd + pbd->h1.offset_to_first_pkt);
+    for (i = 0; i < num_pkts; ++i)
+    {
+        bytes += ppd->tp_snaplen;
+
+        unsigned char *ipp = (uint8_t *)ppd + ppd->tp_mac;
+        size_t datalen = (size_t)ppd->tp_len;
+        unsigned char *dip = &ipp[16];
+
+        bzero(ip, MAX_IPV4_STR_LEN);
+        sprintf(ip, "%d.%d.%d.%d", dip[0], dip[1], dip[2], dip[3]);
+        log_debug("data dst ip: %s\n", ip);
+        if (DEBUG_MODE)
+        {
+            log_debug("tun read:\n");
+            dump_hex(ipp, datalen, 32);
+        }
+
+        // 进行封包处理
+        enlen = len - enlens;
+        enpack(RECORD_TYPE_DATA, ipp, datalen, enpak + enlens, &enlen);
+        enlens += enlen;
+        /* 获取下一个帧的位置 */
+        ppd = (struct tpacket3_hdr *)((uint8_t *)ppd + ppd->tp_next_offset);
+    }
+
+    // // 发送
+    // map<string, SSL *>::iterator iter = maps.find(ip);
+    // if (iter != maps.end())
+    // {
+    //     SSL *ssl = iter->second;
+    //     log_debug("find SSL[%p] for ip: %s\n", ssl, ip);
+    //     // 发消息给客户端
+    //     int ret = SSL_write(ssl, enpak, enlen);
+    //     if (ret <= 0)
+    //     {
+    //         log("SSL[%p]发送失败! 错误代码是%d, 错误信息是'%s'\n", ssl, errno, strerror(errno));
+    //     }
+    // }
+
+    packets_total += num_pkts;
+    bytes_total += bytes;
+}
+
+static void flush_block(struct block_desc *pbd)
+{
+    printf("flush_block\n");
+    pbd->h1.block_status = TP_STATUS_KERNEL;
+}
+
+static void flush_block_tx(struct block_desc *pbd)
+{
+    printf("flush_block\n");
+    pbd->h1.block_status = TP_STATUS_SEND_REQUEST;
+}
+
+static void teardown_socket(struct ring *ring, int fd)
+{
+    /* 销毁套接字 */
+    munmap(ring->map, ring->req.tp_block_size * ring->req.tp_block_nr);
+    free(ring->rd);
+    close(fd);
+}
 
 int pushTunConf(Channel *ch);
 
@@ -496,8 +757,12 @@ void SslDataRead(Channel *ch)
             // 判定数据类型
             if (memcmp(packet, RECORD_TYPE_DATA, RECORD_TYPE_LABEL_LEN) == 0) // vpn数据
             {
+                if (DEBUG_MODE)
+                {
+                    log_debug("ssl read(tun write):\n");
+                    dump_hex(packet + RECORD_HEADER_LEN, datalen, 32);
+                }
                 /* 3、写入到虚拟网卡 */
-                // int wlen = write(tunfd, packet + RECORD_HEADER_LEN, datalen);
                 int wlen = write(ch->tfd_, packet + RECORD_HEADER_LEN, datalen);
                 if (wlen < datalen)
                 {
@@ -670,6 +935,9 @@ void initSSL()
     // 允许使用国密双证书功能
     SSL_CTX_enable_ntls(g_sslCtx);
 
+    // 设置密码套件
+    SSL_CTX_set_cipher_list(g_sslCtx, "TLS_SM4_GCM_SM3:TLS_SM4_CCM_SM3:ECC-SM2-SM4-CBC-SM3:ECDHE-SM2-WITH-SM4-SM3:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA:AES128-GCM-SHA256:AES128-SHA256:AES128-SHA:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES256-SHA:AES256-GCM-SHA384:AES256-SHA256:AES256-SHA:ECDHE-RSA-AES128-SHA256:!aNULL:!eNULL:!RC4:!EXPORT:!DES:!3DES:!MD5:!DSS:!PKS");
+
     if (useTLS13)
     {
         log("enable tls13 sm2 sign");
@@ -677,9 +945,6 @@ void initSSL()
         SSL_CTX_enable_sm_tls13_strict(g_sslCtx);
         SSL_CTX_set1_curves_list(g_sslCtx, "SM2:X25519:prime256v1");
     }
-
-    // 设置密码套件
-    SSL_CTX_set_cipher_list(g_sslCtx, "ECC-SM2-SM4-CBC-SM3:ECDHE-SM2-WITH-SM4-SM3:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA:AES128-GCM-SHA256:AES128-SHA256:AES128-SHA:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES256-SHA:AES256-GCM-SHA384:AES256-SHA256:AES256-SHA:ECDHE-RSA-AES128-SHA256:!aNULL:!eNULL:!RC4:!EXPORT:!DES:!3DES:!MD5:!DSS:!PKS");
     SSL_CTX_set_options(g_sslCtx, SSL_OP_CIPHER_SERVER_PREFERENCE);
 
     // 是否校验客户端
@@ -804,16 +1069,22 @@ void *server_tun_thread(void *arg)
             break;
         }
         // 2、分析报文
-        unsigned char src_ip[4];
-        unsigned char dst_ip[4];
-        memcpy(dst_ip, &buf[16], 4);
-        memcpy(src_ip, &buf[12], 4);
-        // printf("PID[%d] tun[%d] read tun data: %d.%d.%d.%d -> %d.%d.%d.%d (%d)\n", getpid(), *tfd, dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3], src_ip[0], src_ip[1], src_ip[2], src_ip[3], ret_length);
+        // unsigned char src_ip[4];
+        // unsigned char dst_ip[4];
+        // memcpy(src_ip, &buf[12], 4);
+        // memcpy(dst_ip, &buf[16], 4);
+        // log_debug("PID[%d] tun[%d] read tun data: %d.%d.%d.%d -> %d.%d.%d.%d (%d)\n", getpid(), *tfd, src_ip[12], src_ip[13], src_ip[14], src_ip[15], dst_ip[16], dst_ip[17], dst_ip[18], dst_ip[19], ret_length);
+        log_debug("PID[%d] tun[%d] read tun data: %d.%d.%d.%d -> %d.%d.%d.%d (%d)\n", getpid(), *tfd, buf[12], buf[13], buf[14], buf[15], buf[16], buf[17], buf[18], buf[19], ret_length);
+
+        if (DEBUG_MODE)
+        {
+            dump_hex(buf, ret_length, 32);
+        }
 
         // 3、查询客户端
         char ip[MAX_IPV4_STR_LEN] = {0};
         bzero(ip, MAX_IPV4_STR_LEN);
-        sprintf(ip, "%d.%d.%d.%d", dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3]);
+        sprintf(ip, "%d.%d.%d.%d", buf[16], buf[17], buf[18], buf[19]);
 
         map<string, SSL *>::iterator iter = maps.find(ip);
         if (iter == maps.end())
@@ -835,6 +1106,77 @@ void *server_tun_thread(void *arg)
         bzero(buf, MAX_BUF_LEN);
     }
     return NULL;
+}
+
+void *server_tun_thread_mmap(void *arg)
+{
+    int *tfd = (int *)arg;
+    size_t ret_length = 0;
+    unsigned char buf[MAX_BUF_LEN];
+    unsigned char packet[MAX_BUF_LEN + HEADER_LEN];
+    unsigned int enpack_len = 0;
+
+    int fd, err;
+    socklen_t len;
+    struct ring ring;
+    struct pollfd pfd;
+    unsigned int block_num = 0, blocks = 64;
+    struct block_desc *pbd;
+    struct tpacket_stats_v3 stats;
+
+    memset(&ring, 0, sizeof(ring));
+    /* 初始化套接字 */
+    fd = setup_socket(&ring, tunname);
+    assert(fd > 0);
+
+    /* 初始化poll参数 */
+    memset(&pfd, 0, sizeof(pfd));
+    pfd.fd = fd;
+    pfd.events = POLLIN | POLLERR;
+    pfd.revents = 0;
+
+    /* 进入poll的循环收包环节 */
+    while (1)
+    {
+        if (poll(&pfd, 1, -1) <= 0)
+        {
+            log("poll error\n");
+            continue;
+        }
+        log_debug("data comming...\n");
+        pbd = (struct block_desc *)ring.rd[block_num].iov_base;
+
+        /* 检查当前块头的状态，判断是否有数据，没有的话就进行poll */
+        if ((pbd->h1.block_status & TP_STATUS_AVAILABLE) == 0)
+        {
+            log("no data\n");
+            // poll(&pfd, 1, -1);
+            continue;
+        }
+
+        /* 有数据，遍历块里面的帧 */
+        walk_block(pbd, block_num);
+        /* 将块恢复为就绪状态 */
+        flush_block(pbd);
+        block_num = (block_num + 1) % blocks;
+    }
+
+    len = sizeof(stats);
+    /* 获取报文统计信息，然后打印出来。 */
+    err = getsockopt(fd, SOL_PACKET, PACKET_STATISTICS, &stats, &len);
+    if (err < 0)
+    {
+        perror("getsockopt");
+        exit(1);
+    }
+
+    fflush(stdout);
+    printf("\nReceived %u packets, %lu bytes, %u dropped, freeze_q_cnt: %u\n",
+           stats.tp_packets, bytes_total, stats.tp_drops,
+           stats.tp_freeze_q_cnt);
+
+    teardown_socket(&ring, fd);
+    return 0;
 }
 
 /**
@@ -1038,6 +1380,7 @@ void initTun(unsigned int mtu, const char *ipv4, const char *netmask)
 
     memset(&tunCfg, 0, sizeof(TUNCONFIG_T));
     tunCfg.mtu = mtu;
+    strncpy(tunCfg.dev, tunname, sizeof(tunCfg.dev));
     strcpy(tunCfg.ipv4, inet_ntoa(var_ip));
     strcpy(tunCfg.ipv4_net, vipPool.ipv4_net);
 
@@ -1047,6 +1390,7 @@ void initTun(unsigned int mtu, const char *ipv4, const char *netmask)
     // 创建server tun读取线程
     pthread_t serverTunThread;
     ret = pthread_create(&serverTunThread, NULL, server_tun_thread, &tunfd);
+    // ret = pthread_create(&serverTunThread, NULL, server_tun_thread_mmap, &tunfd);
     check0(ret != 0, "create server tun thread fail: %d", ret);
 
     /********* 创建多队列虚拟网卡 *************/
