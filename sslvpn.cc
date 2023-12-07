@@ -53,6 +53,9 @@ char tunname[32];
 static const int MAX_BUF_LEN = 20480;
 static const int MTU = 1500;
 static const char *TUN_DEV = "tun21";
+static const int IPV4_ROUTE_LEN = 20;
+int route4Count = 0;
+char route4[IPV4_ROUTE_LEN * 48];
 int tunmtu = MTU;
 char ca[512];
 char crl[512];
@@ -200,6 +203,8 @@ struct Channel
 };
 
 int pushTunConf(Channel *ch);
+
+int pushRouteConf(Channel *ch);
 
 /**
  * @brief 设置fd为非阻塞fd
@@ -493,7 +498,6 @@ void SslDataRead(Channel *ch)
             if (memcmp(packet, RECORD_TYPE_DATA, RECORD_TYPE_LABEL_LEN) == 0) // vpn数据
             {
                 /* 3、写入到虚拟网卡 */
-                // int wlen = write(tunfd, packet + RECORD_HEADER_LEN, datalen);
                 int wlen = write(ch->tfd_, packet + RECORD_HEADER_LEN, datalen);
                 if (wlen < datalen)
                 {
@@ -508,6 +512,8 @@ void SslDataRead(Channel *ch)
 
                 // 认证成功后推送tun配置
                 pushTunConf(ch);
+                // 推送路由配置
+                pushRouteConf(ch);
             }
             else
             {
@@ -800,16 +806,16 @@ void *server_tun_thread(void *arg)
             break;
         }
         // 2、分析报文
-        unsigned char src_ip[4];
-        unsigned char dst_ip[4];
-        memcpy(dst_ip, &buf[16], 4);
-        memcpy(src_ip, &buf[12], 4);
-        // printf("PID[%d] tun[%d] read tun data: %d.%d.%d.%d -> %d.%d.%d.%d (%d)\n", getpid(), *tfd, dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3], src_ip[0], src_ip[1], src_ip[2], src_ip[3], ret_length);
+        // unsigned char src_ip[4];
+        // unsigned char dst_ip[4];
+        // memcpy(dst_ip, &buf[16], 4);
+        // memcpy(src_ip, &buf[12], 4);
+        log_debug("PID[%d] tun[%d] read tun data: %d.%d.%d.%d -> %d.%d.%d.%d (%d)\n", getpid(), *tfd, buf[12], buf[13], buf[14], buf[15], buf[16], buf[17], buf[18], buf[19], ret_length);
 
         // 3、查询客户端
         char ip[MAX_IPV4_STR_LEN] = {0};
         bzero(ip, MAX_IPV4_STR_LEN);
-        sprintf(ip, "%d.%d.%d.%d", dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3]);
+        sprintf(ip, "%d.%d.%d.%d", buf[16], buf[17], buf[18], buf[19]);
 
         map<string, SSL *>::iterator iter = maps.find(ip);
         if (iter == maps.end())
@@ -983,6 +989,52 @@ int netmask2prefixlen(const char *ip_str)
 }
 
 /**
+ * @brief 自动nat转换配置
+ *
+ */
+void autoNatConfig()
+{
+    char buf[512] = {0};
+
+    if (route4Count == 0)
+    {
+        log("ipv4推送路由为空,忽略自动nat转换配置");
+        return;
+    }
+    for (size_t i = 0; i < route4Count; i++)
+    {
+        /* code */
+        memset(buf, 0, sizeof(buf));
+        sprintf(buf, "iptables -t nat -A POSTROUTING -s %s -d %s -j MASQUERADE", vipPool.ipv4_net, route4 + i * IPV4_ROUTE_LEN);
+        log("设置auto nat: %s\n", buf);
+        system(buf);
+    }
+}
+
+/**
+ * @brief 清除配置的自动nat转换
+ *
+ */
+void releaseAutoNat()
+{
+    char buf[512] = {0};
+
+    if (route4Count == 0)
+    {
+        log("ipv4推送路由为空,忽略自动nat转换配置");
+        return;
+    }
+    for (size_t i = 0; i < route4Count; i++)
+    {
+        /* code */
+        memset(buf, 0, sizeof(buf));
+        sprintf(buf, "iptables -t nat -D POSTROUTING -s %s -d %s -j MASQUERADE", vipPool.ipv4_net, route4 + i * IPV4_ROUTE_LEN);
+        log("删除auto nat: %s\n", buf);
+        system(buf);
+    }
+}
+
+/**
  * @brief 初始化虚拟网卡
  *
  * @param mtu
@@ -1005,6 +1057,7 @@ void initTun(unsigned int mtu, const char *ipv4, const char *netmask)
 
     memset(&tunCfg, 0, sizeof(TUNCONFIG_T));
     tunCfg.mtu = mtu;
+    strncpy(tunCfg.dev, tunname, sizeof(tunCfg.dev));
     strcpy(tunCfg.ipv4, inet_ntoa(var_ip));
     strcpy(tunCfg.ipv4_net, vipPool.ipv4_net);
 
@@ -1112,6 +1165,56 @@ int allocateVip(char *ip, unsigned int *ipLen)
 }
 
 /**
+ * @brief 向客户端推送路由配置
+ *
+ * @param ch
+ * @return int
+ */
+int pushRouteConf(Channel *ch)
+{
+    int writeLen = 0;
+    unsigned char conf[1024] = {0};
+    unsigned char packet[1024 + 8] = {0};
+    unsigned int enpackLen = sizeof(packet);
+    cJSON *root = NULL;
+    cJSON *route4Arr = NULL;
+    SSL *ssl = ch->ssl_;
+
+    if (route4Count == 0)
+    {
+        return 0;
+    }
+    // 创建配置json
+    root = cJSON_CreateObject();
+    route4Arr = cJSON_CreateArray();
+    for (size_t i = 0; i < route4Count; i++)
+    {
+        cJSON_AddItemToArray(route4Arr, cJSON_CreateString(route4 + i * IPV4_ROUTE_LEN));
+    }
+    cJSON_AddItemToObject(root, "route4", route4Arr);
+    // TODO ipv6路由
+
+    char *str = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    log("push ipv4 route to client[%p] -> %s\n", ssl, str);
+
+    memset(conf, 0, sizeof(conf));
+    memcpy(conf, RECORD_TYPE_CONTROL_ROUTE_CONFIG, RECORD_TYPE_LABEL_LEN);
+    memcpy(conf + RECORD_TYPE_LABEL_LEN, str, strlen(str));
+
+    enpack(RECORD_TYPE_CONTROL, conf, strlen(str) + RECORD_TYPE_LABEL_LEN, packet, &enpackLen);
+
+    // 推送数据 TODO 发送数据不全需要处理
+    writeLen = SSL_write(ssl, packet, enpackLen);
+    if (writeLen <= 0)
+    {
+        log("路由配置[%s]推送失败! 错误码: %d, 错误信息: '%s'\n", conf, errno, strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
+/**
  * @brief 向客户端推送网卡配置
  *
  * @param ch
@@ -1171,6 +1274,43 @@ int pushTunConf(Channel *ch)
     return 0;
 }
 
+/**
+ * @brief 解析ipv4推送路由配置
+ *
+ * @param r
+ */
+void parseRoute(char *r)
+{
+    log_debug("parse ipv4 route: %s\n", r);
+    char *ptr = NULL;
+    char *tmp = NULL;
+
+    memset(route4, 0, sizeof(route4));
+    if (strlen(r) <= 0)
+    {
+        return;
+    }
+    ptr = strtok_r(r, ",", &tmp);
+    if (ptr == NULL)
+    {
+        strcpy(route4, r);
+        route4Count = 1;
+        return;
+    }
+    while (ptr)
+    {
+        if (route4Count > 48)
+        {
+            fprintf(stderr, "ipv4推送路由最多支持配置48条\n");
+            exit(1);
+        }
+        printf("%s\n", ptr);
+        strcpy(route4 + route4Count * IPV4_ROUTE_LEN, ptr);
+        route4Count++;
+        ptr = strtok_r(NULL, ",", &tmp);
+    }
+}
+
 /**************************************************************************
  * usage: prints usage and exits.                                         *
  **************************************************************************/
@@ -1182,6 +1322,7 @@ void usage(void)
     fprintf(stderr, "-i: 虚拟网络ip地址, 默认: 10.12.9.0\n");
     fprintf(stderr, "-m: 虚拟网络掩码, 默认: 255.255.255.0\n");
     fprintf(stderr, "-u: 虚拟网卡mtu值, 例如: 1500, 1500 <= mtu <= 15000\n");
+    fprintf(stderr, "-r: ipv4推送路由(最多48条推送路由), 例如: 192.168.20.0/24,10.123.20.0/24\n");
     fprintf(stderr, "-c: 开启客户端验证模式, 开启后必须配置客户端ca证书\n");
     fprintf(stderr, "-a: 客户端ca证书文件, 打开验证客户端模式下生效\n");
     fprintf(stderr, "-g: 开启客户端全代理模式\n");
@@ -1215,7 +1356,7 @@ int main(int argc, char **argv)
     strncpy(vmask, defaultVmask, sizeof(vmask));
 
     /* Check command line options */
-    while ((option = getopt(argc, argv, "t:p:i:m:u:gca:x:l:dh")) > 0)
+    while ((option = getopt(argc, argv, "t:p:i:m:u:r:gca:x:l:dh")) > 0)
     {
         switch (option)
         {
@@ -1234,6 +1375,9 @@ int main(int argc, char **argv)
             break;
         case 'u':
             tunmtu = atoi(optarg);
+            break;
+        case 'r':
+            parseRoute(optarg);
             break;
         case 'g':
             GLOBAL_MODE = true;
@@ -1325,6 +1469,9 @@ int main(int argc, char **argv)
     // 创建并配置虚拟网卡
     initTun(tunmtu, vip, vmask);
 
+    // 自动nat转换配置
+    autoNatConfig();
+
     // 创建服务监听端口
     listenfd = createServer(port);
     Channel *cl = new Channel(listenfd, EPOLLIN | EPOLLET, false);
@@ -1336,6 +1483,8 @@ int main(int argc, char **argv)
     {
         loop_once(epollfd, 100);
     }
+    // 清除已配置的nat转换
+    releaseAutoNat();
     delete cl;
     ::close(epollfd);
     BIO_free(errBio);

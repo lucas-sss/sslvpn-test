@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <signal.h>
 
 #include "protocol.h"
 #include "tun.h"
@@ -32,31 +33,44 @@ static void *client_tun_thread(void *arg);
 
 static int sendAuthData(SSL *ssl);
 
-void ShowCerts(SSL *ssl)
-{
-    X509 *cert;
-    char *line;
+void ShowCerts(SSL *ssl);
 
-    cert = SSL_get_peer_certificate(ssl);
-    if (cert != NULL)
-    {
-        printf("服务端证书信息:\n");
-        line = X509_NAME_oneline(X509_get_subject_name(cert), 0, 0);
-        printf("使用者: %s\n", line);
-        free(line);
-        line = X509_NAME_oneline(X509_get_issuer_name(cert), 0, 0);
-        printf("颁发者: %s\n", line);
-        free(line);
-        X509_free(cert);
-    }
-    else
-    {
-        printf("无证书信息！\n");
-    }
-}
+static const int IPV4_ROUTE_LEN = 20;
+int route4Count = 0;
+char route4[IPV4_ROUTE_LEN * 48];
 
 SSL *ssl;
 int tun_fd;
+TUNCONFIG_T tunCfg;
+
+int g_stop = 0;
+
+void handleInterrupt(int sig)
+{
+    g_stop = true;
+}
+
+void delRoute(const char *route)
+{
+    char buf[512] = {0};
+
+    memset(buf, 0, sizeof(buf));
+    sprintf(buf, "route del -net %s dev %s", route, tunCfg.dev);
+    printf("删除路由: %s\n", buf);
+    system(buf);
+}
+
+void releasePushRoute()
+{
+    if (route4Count == 0)
+    {
+        return;
+    }
+    for (size_t i = 0; i < route4Count; i++)
+    {
+        delRoute(route4 + i * IPV4_ROUTE_LEN);
+    }
+}
 
 int main(int argc, char **argv)
 {
@@ -71,6 +85,9 @@ int main(int argc, char **argv)
     unsigned char *next = NULL;
     unsigned int next_len = 0;
     pthread_t clientTunThread;
+
+    signal(SIGINT, handleInterrupt);
+    signal(SIGTERM, handleInterrupt);
 
     // 变量定义
     const SSL_METHOD *meth = NULL;
@@ -149,6 +166,12 @@ int main(int argc, char **argv)
     }
     printf("socket created\n");
 
+    // 设置超时
+    struct timeval tv;
+    tv.tv_sec = 0;           // 5 seconds
+    tv.tv_usec = 100 * 1000; // 100ms
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
+
     /* 初始化服务器端（对方）的地址和端口信息 */
     bzero(&dest, sizeof(dest));
     dest.sin_family = AF_INET;
@@ -194,7 +217,7 @@ int main(int argc, char **argv)
     }
 
     /*循环读取服务端响应数据*/
-    while (1)
+    while (!g_stop)
     {
         if (next == NULL)
         {
@@ -205,7 +228,7 @@ int main(int argc, char **argv)
         len = SSL_read(ssl, next + next_len, sizeof(buffer) - next_len);
         if (len <= 0)
         {
-            printf("消息接收失败！错误代码是%d, 错误信息是'%s'\n", errno, strerror(errno));
+            // printf("消息接收失败！错误代码是%d, 错误信息是'%s'\n", errno, strerror(errno));
             int ssle = SSL_get_error(ssl, len);
             if (len < 0 && ssle != SSL_ERROR_WANT_READ)
             {
@@ -270,7 +293,14 @@ int main(int argc, char **argv)
             printf("非vpn协议数据\n");
         }
     }
-
+    // 程序运行结束释放推送的路由配置
+    releasePushRoute();
+    // 如果时全局代理，删除指定路由
+    if (tunCfg.global)
+    {
+        delRoute("0.0.0.0/1");
+        delRoute("128.0.0.0/1");
+    }
 finish:
     /* 关闭连接 */
     SSL_shutdown(ssl);
@@ -323,11 +353,22 @@ static void *client_tun_thread(void *arg)
     return NULL;
 }
 
+static void addRoute(char *route)
+{
+    char buf[512] = {0};
+    memset(buf, 0, sizeof(buf));
+    sprintf(buf, "route add -net %s dev %s", route, tunCfg.dev);
+    printf("添加路由: %s\n", buf);
+    system(buf);
+}
+
 static int controlHandler(unsigned char *data, unsigned int len)
 {
     int ret = 0;
     cJSON *root = NULL;
     cJSON *iterm_global = NULL, *iterm_cvip = NULL, *iterm_ipv4_net = NULL, *iterm_mtu = NULL;
+    cJSON *iterm_route4 = NULL, *route_item = NULL;
+    int route4_array_size = 0;
 
     printf("receive config: %s\n", data + RECORD_TYPE_LABEL_LEN);
 
@@ -354,6 +395,18 @@ static int controlHandler(unsigned char *data, unsigned int len)
     }
     else if (memcmp(data, RECORD_TYPE_CONTROL_ROUTE_CONFIG, RECORD_TYPE_LABEL_LEN) == 0) // 路由配置控制类型
     {
+        route4Count = 0;
+        memset(route4, 0, sizeof(route4));
+        iterm_route4 = cJSON_GetObjectItem(root, "route4");
+        route4_array_size = cJSON_GetArraySize(iterm_route4);
+        for (size_t i = 0; i < route4_array_size; i++)
+        {
+            route_item = cJSON_GetArrayItem(iterm_route4, i);
+            strcpy(route4 + i * IPV4_ROUTE_LEN, route_item->valuestring);
+            route4Count++;
+            // 添加路由
+            addRoute(route_item->valuestring);
+        }
     }
     else
     {
@@ -367,7 +420,6 @@ static int initTun(int global, char *cvip, char *ipv4_net, unsigned int mtu)
 {
     printf("----------------\n");
     // 创建tun虚拟网卡
-    TUNCONFIG_T tunCfg = {0};
     pthread_t clientTunThread;
 
     memset(&tunCfg, 0, sizeof(TUNCONFIG_T));
@@ -417,4 +469,27 @@ static int sendAuthData(SSL *ssl)
         return -1;
     }
     return 0;
+}
+
+void ShowCerts(SSL *ssl)
+{
+    X509 *cert;
+    char *line;
+
+    cert = SSL_get_peer_certificate(ssl);
+    if (cert != NULL)
+    {
+        printf("服务端证书信息:\n");
+        line = X509_NAME_oneline(X509_get_subject_name(cert), 0, 0);
+        printf("使用者: %s\n", line);
+        free(line);
+        line = X509_NAME_oneline(X509_get_issuer_name(cert), 0, 0);
+        printf("颁发者: %s\n", line);
+        free(line);
+        X509_free(cert);
+    }
+    else
+    {
+        printf("无证书信息！\n");
+    }
 }

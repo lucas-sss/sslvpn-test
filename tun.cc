@@ -30,8 +30,8 @@ extern "C"
         char buf[512] = {0};
         char mtuStr[16] = {0};
 
-        printf("tun config -> dev: %s, mtu: %d, ipv4: %s, ipv4_net: %s, ipv6: %s\n", tunCfg->dev,
-               tunCfg->mtu, tunCfg->ipv4, tunCfg->ipv4_net, tunCfg->ipv6);
+        printf("tun config -> global: %d dev: %s, mtu: %d, ipv4: %s, ipv4_net: %s, ipv6: %s\n", tunCfg->global,
+               tunCfg->dev, tunCfg->mtu, tunCfg->ipv4, tunCfg->ipv4_net, tunCfg->ipv6);
 
         // 设置mtu
         memset(buf, 0, sizeof(buf));
@@ -68,6 +68,18 @@ extern "C"
         printf("shell run: %s\n", buf);
         system(buf);
 
+        // 设置了全局代理
+        if (tunCfg->global)
+        {
+            memset(buf, 0, sizeof(buf));
+            sprintf(buf, "route add -net 0.0.0.0/1 dev %s", tunCfg->dev);
+            printf("shell run: %s\n", buf);
+            system(buf);
+            memset(buf, 0, sizeof(buf));
+            sprintf(buf, "route add -net 128.0.0.0/1 dev %s", tunCfg->dev);
+            printf("shell run: %s\n", buf);
+            system(buf);
+        }
         return 0;
     }
 
