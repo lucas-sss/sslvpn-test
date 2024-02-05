@@ -998,7 +998,7 @@ void autoNatConfig()
 
     if (route4Count == 0)
     {
-        log("ipv4推送路由为空,忽略自动nat转换配置");
+        log("ipv4推送路由为空,忽略配置自动nat转换\n");
         return;
     }
     for (size_t i = 0; i < route4Count; i++)
@@ -1021,7 +1021,7 @@ void releaseAutoNat()
 
     if (route4Count == 0)
     {
-        log("ipv4推送路由为空,忽略自动nat转换配置");
+        log("ipv4推送路由为空,忽略释放自动nat转换配置\n");
         return;
     }
     for (size_t i = 0; i < route4Count; i++)
