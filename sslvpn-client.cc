@@ -13,15 +13,19 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <signal.h>
+#include <regex.h>
 
 #include "protocol.h"
 #include "tun.h"
 #include "cJSON.h"
 #include "print.h"
+#include "engine/sslengine.h"
 
 #define MAX_BUF_SIZE 20480
 
 using namespace std;
+
+static ENGINE *e;
 
 // 初始化虚拟网卡
 static int initTun(int global, char *cvip, char *ipv4_net, unsigned int mtu);
@@ -34,6 +38,13 @@ static void *client_tun_thread(void *arg);
 static int sendAuthData(SSL *ssl);
 
 void ShowCerts(SSL *ssl);
+
+int isIPv4Valid(const char *ip);
+
+static bool DEBUG_MODE = false; // debug模式
+static bool USE_ENGINE = false; // 使用engine
+static char serverIp[16];
+static int serverPort;
 
 static const int IPV4_ROUTE_LEN = 20;
 int route4Count = 0;
@@ -72,8 +83,20 @@ void releasePushRoute()
     }
 }
 
+void usage(void)
+{
+    fprintf(stderr, "Usage:\n");
+    fprintf(stderr, "-e: 使用engine\n");
+    fprintf(stderr, "-s: 服务端ip地址\n");
+    fprintf(stderr, "-p: 服务端port\n");
+    fprintf(stderr, "-d: 开启debug模式\n");
+    fprintf(stderr, "-h: 使用帮助\n");
+    exit(1);
+}
+
 int main(int argc, char **argv)
 {
+    int option;
     bool useTLS13 = false;
     bool useDHE = false;
     int sockfd, len;
@@ -86,8 +109,58 @@ int main(int argc, char **argv)
     unsigned int next_len = 0;
     pthread_t clientTunThread;
 
+    /* Check command line options */
+    while ((option = getopt(argc, argv, "es:p:dh")) > 0)
+    {
+        switch (option)
+        {
+        case 'e':
+            USE_ENGINE = true;
+            break;
+        case 's':
+            memset(serverIp, 0, sizeof(serverIp));
+            strncpy(serverIp, optarg, sizeof(serverIp));
+            break;
+        case 'p':
+            serverPort = atoi(optarg);
+            break;
+        case 'd':
+            DEBUG_MODE = true;
+            break;
+        default:
+            printf("Unknown option %c\n", option);
+            usage();
+        }
+    }
+    argv += optind;
+    argc -= optind;
+    if (argc > 0)
+    {
+        printf("Too many options!\n");
+        usage();
+    }
+    if (!isIPv4Valid(serverIp))
+    {
+        printf("非法服务端ip地址\n");
+        usage();
+    }
+    if (serverPort <= 0 || serverPort > 65535)
+    {
+        printf("非法服务端端口\n");
+        usage();
+    }
+
     signal(SIGINT, handleInterrupt);
     signal(SIGTERM, handleInterrupt);
+
+    if (USE_ENGINE)
+    {
+        e = register_engine();
+        if (e == NULL)
+        {
+            printf("register engine fail\n");
+        }
+    }
 
     // 变量定义
     const SSL_METHOD *meth = NULL;
@@ -96,12 +169,6 @@ int main(int argc, char **argv)
     const char *sign_cert_file = "certs/signclient.crt";
     const char *enc_key_file = "certs/encclient.key";
     const char *enc_cert_file = "certs/encclient.crt";
-
-    if (argc != 3)
-    {
-        printf("please run this: ./sslvpn-client server_ip server_port\n");
-        exit(-1);
-    }
 
     // 双证书相关client的各种定义
     meth = NTLS_client_method();
@@ -175,8 +242,8 @@ int main(int argc, char **argv)
     /* 初始化服务器端（对方）的地址和端口信息 */
     bzero(&dest, sizeof(dest));
     dest.sin_family = AF_INET;
-    dest.sin_port = htons(atoi(argv[2]));
-    if (inet_aton(argv[1], (struct in_addr *)&dest.sin_addr.s_addr) == 0)
+    dest.sin_port = htons(serverPort);
+    if (inet_aton(serverIp, (struct in_addr *)&dest.sin_addr.s_addr) == 0)
     {
         perror(argv[1]);
         exit(errno);
@@ -492,4 +559,20 @@ void ShowCerts(SSL *ssl)
     {
         printf("无证书信息！\n");
     }
+}
+
+int isIPv4Valid(const char *ip)
+{
+    regex_t regex;
+    int ret = regcomp(&regex, "^([0-9]{1,3}\\.){3}[0-9]{1,3}$", REG_EXTENDED);
+    if (ret != 0)
+    {
+        fprintf(stderr, "Could not compile regex\n");
+        return 0;
+    }
+
+    ret = regexec(&regex, ip, 0, NULL, 0);
+    regfree(&regex);
+
+    return (ret == 0);
 }

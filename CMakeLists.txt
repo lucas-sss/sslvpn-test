@@ -4,19 +4,24 @@ project(openssl-example CXX)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_CXX_STANDARD 11)
 
-
-#add_compile_options(-Wall -Wextra -pedantic -Werror)
+# add_compile_options(-Wall -Wextra -pedantic -Werror)
+add_compile_options(-fpermissive)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pipe -std=c99")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pipe -std=c++11")
 
-include_directories("/opt/tongsuo/include")
+include_directories(
+  ${PROJECT_SOURCE_DIR}/include
+  "/opt/tongsuo/include"
+  ${PROJECT_SOURCE_DIR}/engine
+)
 link_directories("/opt/tongsuo/lib64")
 
+aux_source_directory(${PROJECT_SOURCE_DIR}/engine engine_source)
 
-add_executable(sslvpn sslvpn.cc tun.cc protocol.cc cJSON.cc print.cc proxy.cc)
+add_executable(sslvpn sslvpn.cc tun.cc protocol.cc cJSON.cc print.cc proxy.cc ${engine_source})
 target_link_libraries(sslvpn ssl crypto pthread)
 
-add_executable(sslvpn-client sslvpn-client.cc tun.cc protocol.cc cJSON.cc print.cc)
+add_executable(sslvpn-client sslvpn-client.cc tun.cc protocol.cc cJSON.cc print.cc ${engine_source})
 target_link_libraries(sslvpn-client ssl crypto pthread)
 
 # 拷贝文件夹到指定的目录

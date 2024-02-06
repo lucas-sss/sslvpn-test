@@ -19,6 +19,7 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <map>
+#include "engine/sslengine.h"
 
 #include "tun.h"
 #include "protocol.h"
@@ -49,6 +50,9 @@ using namespace std;
             exit(1);          \
     } while (0)
 
+//  全局引擎
+static ENGINE *e;
+
 char tunname[32];
 static const int MAX_BUF_LEN = 20480;
 static const int MTU = 1500;
@@ -65,6 +69,7 @@ static const int MAX_TUN_QUEUE_SIZE = 8;
 int tunQueueSize = 1;
 int fds[MAX_TUN_QUEUE_SIZE];
 
+static bool USE_ENGINE = false; // 使用engine
 static bool DEBUG_MODE = false; // debug模式
 static bool GLOBAL_MODE = false;
 static bool OPEN_PROXY = false;
@@ -662,6 +667,15 @@ void initSSL()
     check0(!r, "SSL_library_init failed");
     errBio = BIO_new_fd(2, BIO_NOCLOSE);
 
+    if (USE_ENGINE)
+    {
+        e = register_engine();
+        if (e == NULL)
+        {
+            log("register engine fail\n");
+        }
+    }
+
     // 使用SSLv23_method可以同时支持客户同时支持rsa证书和sm2证书，支持普通浏览器和国密浏览器的访问
     // g_sslCtx = SSL_CTX_new(SSLv23_method());
     // 双证书相关server的各种定义
@@ -674,7 +688,7 @@ void initSSL()
 
     if (useTLS13)
     {
-        log("enable tls13 sm2 sign");
+        log("enable tls13 sm2 sign\n");
         // tongsuo中tls1.3不强制签名使用sm2签名，使用开关控制，对应客户端指定密码套件SSL_CTX_set_ciphersuites(ctx, "TLS_SM4_GCM_SM3");
         SSL_CTX_enable_sm_tls13_strict(g_sslCtx);
         SSL_CTX_set1_curves_list(g_sslCtx, "SM2:X25519:prime256v1");
@@ -1317,6 +1331,7 @@ void parseRoute(char *r)
 void usage(void)
 {
     fprintf(stderr, "Usage:\n");
+    fprintf(stderr, "-e: 使用engine\n");
     fprintf(stderr, "-t: tun网卡名称, 默认为tun21\n");
     fprintf(stderr, "-p: 服务运行端口, 默认: 1443\n");
     fprintf(stderr, "-i: 虚拟网络ip地址, 默认: 10.12.9.0\n");
@@ -1356,10 +1371,13 @@ int main(int argc, char **argv)
     strncpy(vmask, defaultVmask, sizeof(vmask));
 
     /* Check command line options */
-    while ((option = getopt(argc, argv, "t:p:i:m:u:r:gca:x:l:dh")) > 0)
+    while ((option = getopt(argc, argv, "et:p:i:m:u:r:gca:x:l:dh")) > 0)
     {
         switch (option)
         {
+        case 'e':
+            USE_ENGINE = true;
+            break;
         case 't':
             memset(tunname, 0, sizeof(tunname));
             strncpy(tunname, optarg, sizeof(tunname));

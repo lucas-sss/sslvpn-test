@@ -1,3 +1,11 @@
+/*
+ * @Author: lw liuwei@flksec.com
+ * @Date: 2023-09-16 22:40:00
+ * @LastEditors: lw liuwei@flksec.com
+ * @LastEditTime: 2024-02-05 14:34:57
+ * @FilePath: \sslvpn-test\tun.cc
+ * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+ */
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
