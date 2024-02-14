@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include "cipher.h"
 #include "sslengine.h"
+#include "cache.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -14,12 +15,17 @@ extern "C"
     static int engine_init(ENGINE *e)
     {
         printf("ENGINE -> engine_init\n");
+        if (sdfSessionInit() != 0)
+        {
+            printf("sdf session init fail\n");
+        }
         return 1;
     }
 
     static int engine_finish(ENGINE *e)
     {
         printf("ENGINE -> engine_finish\n");
+        sdfSessionDestory();
         return 1;
     }
 

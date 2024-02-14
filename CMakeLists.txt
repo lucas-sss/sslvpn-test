@@ -19,10 +19,10 @@ link_directories("/opt/tongsuo/lib64")
 aux_source_directory(${PROJECT_SOURCE_DIR}/engine engine_source)
 
 add_executable(sslvpn sslvpn.cc tun.cc protocol.cc cJSON.cc print.cc proxy.cc ${engine_source})
-target_link_libraries(sslvpn ssl crypto pthread)
+target_link_libraries(sslvpn ssl crypto pthread sdf_crypto)
 
 add_executable(sslvpn-client sslvpn-client.cc tun.cc protocol.cc cJSON.cc print.cc ${engine_source})
-target_link_libraries(sslvpn-client ssl crypto pthread)
+target_link_libraries(sslvpn-client ssl crypto pthread sdf_crypto)
 
 # 拷贝文件夹到指定的目录
 add_custom_target(copy_certs ALL  
