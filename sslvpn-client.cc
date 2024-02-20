@@ -235,7 +235,7 @@ int main(int argc, char **argv)
 
     // 设置超时
     struct timeval tv;
-    tv.tv_sec = 0;           // 5 seconds
+    tv.tv_sec = 2;           // 5 seconds
     tv.tv_usec = 100 * 1000; // 100ms
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
 
@@ -250,31 +250,44 @@ int main(int argc, char **argv)
     }
 
     printf("address created\n");
-
-    /* 连接服务器 */
-    if (connect(sockfd, (struct sockaddr *)&dest, sizeof(dest)) != 0)
+reconnect:
+    while (1)
     {
-        perror("Connect ");
-        exit(errno);
-    }
-    // printf("server connected\n");
+        /* code */
+        /* 连接服务器 */
+        if (connect(sockfd, (struct sockaddr *)&dest, sizeof(dest)) != 0)
+        {
+            perror("Connect ");
+            goto retry;
+        }
+        // printf("server connected\n");
 
-    /* 基于 ctx 产生一个新的 SSL */
-    ssl = SSL_new(ctx);
-    SSL_set_fd(ssl, sockfd);
+        /* 基于 ctx 产生一个新的 SSL */
+        ssl = SSL_new(ctx);
+        SSL_set_fd(ssl, sockfd);
 
-    /* 建立 SSL 连接 */
-    if (SSL_connect(ssl) == -1)
-    {
-        ERR_print_errors_fp(stderr);
-        goto exit;
+        /* 建立 SSL 连接 */
+        if (SSL_connect(ssl) == -1)
+        {
+            ERR_print_errors_fp(stderr);
+            goto retry;
+        }
+        else
+        {
+            printf("密码套件: %s\n", SSL_get_cipher(ssl));
+            ShowCerts(ssl);
+            printf("SSL_connect finish\n");
+            break;
+        }
+    retry:
+        if (g_stop)
+        {
+            printf("used Ctrl+C stop.\n");
+            exit(0);
+        }
+        printf("SSL_connect fail, retry after 3 sesond\n");
+        sleep(3); // 睡眠3秒
     }
-    else
-    {
-        printf("密码套件: %s\n", SSL_get_cipher(ssl));
-        ShowCerts(ssl);
-    }
-    printf("SSL_connect finish\n");
 
     // 发送登录认证消息
     if (sendAuthData(ssl) != 0)
@@ -308,11 +321,13 @@ int main(int argc, char **argv)
             }
             if (len == 0)
             {
+                printf("read zero len, sslerr: %d, strerror: %s\n", ssle, strerror(errno));
                 if (ssle == SSL_ERROR_ZERO_RETURN)
                     printf("SSL has been shutdown.\n");
                 else
                     printf("Connection has been aborted.\n");
-                goto finish;
+                // goto finish;
+                goto reconnect;
             }
             continue;
         }
