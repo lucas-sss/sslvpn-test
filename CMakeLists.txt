@@ -4,6 +4,9 @@ project(openssl-example CXX)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_CXX_STANDARD 11)
 
+# 是否使用加密卡宏控制
+# add_definitions(-DNO_SDF)
+
 # add_compile_options(-Wall -Wextra -pedantic -Werror)
 add_compile_options(-fpermissive)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pipe -std=c99")
@@ -14,7 +17,9 @@ include_directories(
   "/opt/tongsuo/include"
   ${PROJECT_SOURCE_DIR}/engine
 )
+
 link_directories("/opt/tongsuo/lib64")
+# link_directories("/home/cq/new_arch/Tongsuo/lib64_opt")
 
 aux_source_directory(${PROJECT_SOURCE_DIR}/engine engine_source)
 

@@ -6,10 +6,10 @@
 #include <openssl/obj_mac.h>
 #include <stdio.h>
 
-#include "cipher.h"
-#include "../print.h"
+#include "sm4.h"
 #include "sdf.h"
-#include "cache.h"
+#include "key.h"
+#include "../print.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -18,26 +18,26 @@ extern "C"
 
     static int sdf_cipher_init(EVP_CIPHER_CTX *ctx, const unsigned char *key, const unsigned char *iv, int enc)
     {
+#ifndef NO_SDF
         EVP_SM4_CBC_SDF_CTX *key_ctx = (EVP_SM4_CBC_SDF_CTX *)EVP_CIPHER_CTX_get_cipher_data(ctx);
         memset(key_ctx, 0, sizeof(EVP_SM4_CBC_SDF_CTX));
         memcpy(key_ctx->key, key, SM4_KEY_LENGTH);
         memcpy(key_ctx->iv, iv, SM4_KEY_LENGTH);
         key_ctx->enc = enc;
         return 1;
-
-        // 软算法
-        // return EVP_CIPHER_meth_get_init(EVP_sm4_cbc())(ctx, key, iv, enc);
+#else
+    // 软算法
+    return EVP_CIPHER_meth_get_init(EVP_sm4_cbc())(ctx, key, iv, enc);
+#endif
     }
 
     static int sdf_do_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out, const unsigned char *in, size_t inl)
     {
+#ifndef NO_SDF
         int r, l;
         unsigned char key[SM4_KEY_LENGTH] = {0};
         unsigned char iv[SM4_KEY_LENGTH] = {0};
         EVP_SM4_CBC_SDF_CTX *key_ctx = NULL;
-        void *sessionHandle = NULL;
-        void *keyHandle = NULL;
-
         unsigned int outl = 0;
 
         if (!out || !in)
@@ -47,40 +47,65 @@ extern "C"
 
         key_ctx = (EVP_SM4_CBC_SDF_CTX *)EVP_CIPHER_CTX_get_cipher_data(ctx);
         memcpy(key, key_ctx->key, SM4_KEY_LENGTH);
-        memcpy(iv, EVP_CIPHER_CTX_iv_noconst(ctx), SM4_KEY_LENGTH);
+        // memcpy(iv, EVP_CIPHER_CTX_iv_noconst(ctx), SM4_KEY_LENGTH);
+        memcpy(iv, key_ctx->iv, SM4_KEY_LENGTH);
 
-        r = getSdfSession(&sessionHandle);
-        if (r != 0)
-        {
-            printf("get sdf session fail, ret: %x\n", r);
-            return 0;
-        }
+        // printf("ENGINE -> sdf_do_cipher, inl: %d, enc: %d\n", inl, key_ctx->enc);
 
-        r = SDF_ImportKey(sessionHandle, key, SM4_KEY_LENGTH, &keyHandle);
+        KEY_LINK *keyLink = NULL;
+        r = getKeyLink(&keyLink, key);
         if (r)
         {
-            printf("SDF_ImportKey fail, ret: %x\n", r);
+            printf("ENGINE -> sdf_do_cipher: get key link fail, ret: %x\n", r);
             return 0;
         }
 
+        // printf("devHandle: %p, sessionHandle: %p, keyHandle: %p\n", keyLink->session->devHandle, keyLink->session->sessionHandle, keyLink->keyHandle);
         if (key_ctx->enc)
         {
-            r = SDF_Encrypt(sessionHandle, keyHandle, SGD_SMS4_CBC, iv, in, inl, out, &outl);
+            // r = SDF_Encrypt(sessionHandle, keyHandle, SGD_SMS4_CBC, iv, in, inl, out, &outl);
+            r = SDF_Encrypt(keyLink->session->sessionHandle, keyLink->keyHandle, SGD_SMS4_CBC, iv, in, inl, out, &outl);
         }
         else
         {
-            r = SDF_Decrypt(sessionHandle, keyHandle, SGD_SMS4_CBC, iv, in, inl, out, &outl);
+            // r = SDF_Decrypt(sessionHandle, keyHandle, SGD_SMS4_CBC, iv, in, inl, out, &outl);
+            r = SDF_Decrypt(keyLink->session->sessionHandle, keyLink->keyHandle, SGD_SMS4_CBC, iv, in, inl, out, &outl);
         }
-
-        SDF_DestroyKey(sessionHandle, keyHandle);
         if (r)
         {
+            printf("ENGINE -> sdf_do_cipher: sdf ctypto fail, ret: %x\n", r);
             return 0;
         }
-        return 1;
+        // dump_hex(out, outl, 32);
 
-        // 软算法
-        // return EVP_CIPHER_meth_get_do_cipher(EVP_sm4_cbc())(ctx, out, in, inl);
+        return 1;
+#else
+    // 软算法
+    return EVP_CIPHER_meth_get_do_cipher(EVP_sm4_cbc())(ctx, out, in, inl);
+#ifdef NO_CRYPTO
+    unsigned char *tmpbuf;
+    int ret;
+
+    tmpbuf = OPENSSL_malloc(inl);
+
+    /* OPENSSL_malloc will return NULL if inl == 0 */
+    if (tmpbuf == NULL && inl > 0)
+        return -1;
+
+    /* Remember what we were asked to encrypt */
+    if (tmpbuf != NULL)
+        memcpy(tmpbuf, in, inl);
+
+    /* Go through the motions of encrypting it */
+    // ret = EVP_CIPHER_meth_get_do_cipher(EVP_sm4_cbc())(ctx, out, in, inl);
+
+    /* Throw it all away and just use the plaintext as the output */
+    if (tmpbuf != NULL)
+        memcpy(out, tmpbuf, inl);
+    OPENSSL_free(tmpbuf);
+    return 1;
+#endif
+#endif
     }
 
     static EVP_CIPHER *_hidden_sm4_cbc_sdf = NULL;
@@ -92,8 +117,12 @@ extern "C"
                                             !EVP_CIPHER_meth_set_flags(_hidden_sm4_cbc_sdf, EVP_CIPH_FLAG_DEFAULT_ASN1 | EVP_CIPH_CBC_MODE) ||
                                             !EVP_CIPHER_meth_set_init(_hidden_sm4_cbc_sdf, sdf_cipher_init) ||
                                             !EVP_CIPHER_meth_set_do_cipher(_hidden_sm4_cbc_sdf, sdf_do_cipher) ||
-                                            // !EVP_CIPHER_meth_set_impl_ctx_size(_hidden_sm4_cbc_sdf, EVP_CIPHER_impl_ctx_size(EVP_sm4_cbc())))) //软算法
+#ifndef NO_SDF
                                             !EVP_CIPHER_meth_set_impl_ctx_size(_hidden_sm4_cbc_sdf, sizeof(EVP_SM4_CBC_SDF_CTX))))
+#else
+                                        !EVP_CIPHER_meth_set_impl_ctx_size(_hidden_sm4_cbc_sdf, EVP_CIPHER_impl_ctx_size(EVP_sm4_cbc())))) // 软算法
+#endif
+
         {
             printf("EVP_sm4_cbc_sdf() -> error\n");
             EVP_CIPHER_meth_free(_hidden_sm4_cbc_sdf);
@@ -121,12 +150,8 @@ extern "C"
         case NID_sm4_ecb:
             return EVP_sm4_ecb();
         case NID_sm4_cbc:
-#ifdef SDF
+            // return EVP_sm4_cbc();
             return EVP_sm4_cbc_sdf();
-#else
-        return EVP_sm4_cbc_sdf();
-        // return EVP_sm4_cbc();
-#endif
         case NID_sm4_ctr:
             return EVP_sm4_ctr();
         default:
@@ -145,7 +170,7 @@ extern "C"
         return NULL;
     }
 
-    int flk_ssl_engine_create_cipher(void)
+    int ssl_engine_create_cipher(void)
     {
         int i;
         for (i = 0; i < sizeof(info) / sizeof(cipher_info_t); i++)
@@ -156,7 +181,7 @@ extern "C"
         return 1;
     }
 
-    int flk_ssl_engine_ciphers(ENGINE *e, const EVP_CIPHER **cipher, const int **nids, int nid)
+    int ssl_engine_ciphers(ENGINE *e, const EVP_CIPHER **cipher, const int **nids, int nid)
     {
         if (!cipher)
         {

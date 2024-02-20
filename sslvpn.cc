@@ -19,7 +19,7 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <map>
-#include "engine/sslengine.h"
+#include "engine/ssl_engine.h"
 
 #include "tun.h"
 #include "protocol.h"
