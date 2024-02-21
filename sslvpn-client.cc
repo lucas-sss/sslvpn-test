@@ -170,6 +170,7 @@ int main(int argc, char **argv)
     const char *enc_key_file = "certs/encclient.key";
     const char *enc_cert_file = "certs/encclient.crt";
 
+reconnect:
     // 双证书相关client的各种定义
     meth = NTLS_client_method();
     // 生成上下文
@@ -250,7 +251,7 @@ int main(int argc, char **argv)
     }
 
     printf("address created\n");
-reconnect:
+
     while (1)
     {
         /* code */
