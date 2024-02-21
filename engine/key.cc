@@ -2,7 +2,7 @@
  * @Author: lw liuwei@flksec.com
  * @Date: 2024-02-06 16:20:35
  * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2024-02-20 22:17:51
+ * @LastEditTime: 2024-02-21 09:22:07
  * @FilePath: \sslvpn-test\engine\sdfcache.cc
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -26,8 +26,10 @@ extern "C"
     static int initSessionLink(SESSION_LINK *link, int threadId);
     static int initKeyLink(KEY_LINK *link, unsigned char *key, int threadId);
 
+#ifndef NO_SDF
     int sdfSessionInit()
     {
+        printf("ENGINE -> sdfSessionInit\n");
         // 初始化sessionLink
         sessionLink = (SESSION_LINK *)calloc(1, sizeof(SESSION_LINK));
         if (!sessionLink)
@@ -54,8 +56,38 @@ extern "C"
 
     int sdfSessionDestory()
     {
-        // TODO 关闭key
-        // TODO 关闭session
+        int r;
+        // 销毁key
+        KEY_LINK *temp = keyLink->next;
+        while (temp)
+        {
+            if (temp->session->sessionHandle)
+            {
+                r = SDF_DestroyKey(temp->session->sessionHandle, temp->keyHandle);
+                if (r)
+                {
+                    printf("SDF_DestroyKey failed, ret: %x\n", r);
+                }
+            }
+            temp = temp->next;
+        }
+        // 关闭session
+        SESSION_LINK *tempSessionLink = sessionLink;
+        while (tempSessionLink)
+        {
+            r = SDF_CloseSession(tempSessionLink->sessionHandle);
+            if (r)
+            {
+                printf("SDF_CloseSession failed, ret: %x\n", r);
+            }
+            r = SDF_CloseDevice(tempSessionLink->devHandle);
+            if (r)
+            {
+                printf("SDF_CloseDevice failed, ret: %x\n", r);
+            }
+            tempSessionLink = tempSessionLink->next;
+        }
+        printf("ENGINE -> sdfSessionDestory finish\n");
     }
 
     static int initSessionLink(SESSION_LINK *link, int threadId)
@@ -171,6 +203,7 @@ extern "C"
         *link = temp;
         return 0;
     }
+#endif
 
 #ifdef __cplusplus
 }

@@ -2,7 +2,7 @@
  * @Author: lw liuwei@flksec.com
  * @Date: 2024-02-05 14:34:28
  * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2024-02-20 22:00:17
+ * @LastEditTime: 2024-02-21 09:00:28
  * @FilePath: \sslvpn-test\engine\sslengine.cc
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -24,17 +24,21 @@ extern "C"
     static int engine_init(ENGINE *e)
     {
         printf("ENGINE -> engine_init\n");
+#ifndef NO_SDF
         if (sdfSessionInit() != 0)
         {
             printf("sdf session init fail\n");
         }
+#endif
         return 1;
     }
 
     static int engine_finish(ENGINE *e)
     {
         printf("ENGINE -> engine_finish\n");
+#ifndef NO_SDF
         sdfSessionDestory();
+#endif
         return 1;
     }
 
