@@ -669,6 +669,7 @@ void initSSL()
 
     if (USE_ENGINE)
     {
+        log("register engine...\n");
         e = register_engine();
         if (e == NULL)
         {

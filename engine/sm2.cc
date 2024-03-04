@@ -2,7 +2,7 @@
  * @Author: lw liuwei@flksec.com
  * @Date: 2024-02-14 22:30:41
  * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2024-02-16 21:36:23
+ * @LastEditTime: 2024-03-02 22:52:44
  * @FilePath: \sslvpn-test\engine\sm2.cc
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -15,6 +15,8 @@
 #include "sm2.h"
 #include "sdf_type.h"
 #include "ec_helper.h"
+#include "sdf.h"
+#include "key.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -74,8 +76,16 @@ extern "C"
         return (*default_keygen)(ctx, pkey);
     }
 
-    static int ec_pkey_sign(EVP_PKEY_CTX *ctx, uint8_t *sig, size_t *siglen, const uint8_t *tbs, size_t tbslen)
+    static int sdf_ec_pkey_sign_init(EVP_PKEY_CTX *ctx)
     {
+        printf("ENGINE -> sdf_ec_pkey_sign_init\n");
+
+        return 1;
+    }
+
+    static int sdf_ec_pkey_sign(EVP_PKEY_CTX *ctx, uint8_t *sig, size_t *siglen, const uint8_t *tbs, size_t tbslen)
+    {
+        printf("ENGINE -> sdf_ec_pkey_sign\n");
 #ifndef NO_SDF
         int r;
         ECCSignature signature;
@@ -89,21 +99,28 @@ extern "C"
         EC_KEY *ec_key = EVP_PKEY_get0_EC_KEY(EVP_PKEY_CTX_get0_pkey(ctx));
         if (!EC_KEY_check_key(ec_key))
         {
-            printf("ENGINE -> ec_pkey_sign: EC_KEY_check_key failed\n");
+            printf("ENGINE -> sdf_ec_pkey_sign: EC_KEY_check_key failed\n");
             return 0;
         }
         if (!EC_KEY_get_ECCrefPrivateKey(ec_key, &privateKey))
         {
-            printf("ENGINE -> ec_pkey_sign: EC_KEY_get_ECCrefPrivateKey failed\n");
+            printf("ENGINE -> sdf_ec_pkey_sign: EC_KEY_get_ECCrefPrivateKey failed\n");
             return 0;
         }
 
         // 签名
-        // r = flk_SDF_ExtSign_ECC(&privateKey, tbs, tbslen, &signature);
+        SESSION_LINK *link;
+        r = getSessionLink(&link);
+        if (r)
+        {
+            printf("ENGINE -> sdf_ec_pkey_sign: get sdf session fail, ret[%x]\n", r);
+            return 0;
+        }
+        r = SDF_ExternalSign_ECC(link->sessionHandle, SGD_SM2_1, &privateKey, tbs, tbslen, &signature);
         // r = flk_SDF_IntSign_ECC(GUOXIN_SDF_KEY_INDEX, tbs, tbslen, &signature);
         if (r)
         {
-            printf("ENGINE -> ec_pkey_sign: flk_SDF_ExtSign_ECC, ret[%x]\n", r);
+            printf("ENGINE -> sdf_ec_pkey_sign: flk_SDF_ExtSign_ECC, ret[%x]\n", r);
             return 0;
         }
 
@@ -111,7 +128,7 @@ extern "C"
         r = i2d_ECCSignature(&signature, &pp);
         if (!r)
         {
-            printf("ENGINE -> ec_pkey_sign: i2d_ECCSignature failed\n");
+            printf("ENGINE -> sdf_ec_pkey_sign: i2d_ECCSignature failed\n");
             return 0;
         }
         *siglen = r;
@@ -128,6 +145,7 @@ extern "C"
 
     static int ec_pkey_verify(EVP_PKEY_CTX *ctx, const uint8_t *sig, size_t siglen, const uint8_t *tbs, size_t tbslen)
     {
+        printf("ENGINE -> ec_pkey_verify\n");
 
 #ifndef NO_SDF
         int r, derlen = -1;
@@ -180,8 +198,16 @@ extern "C"
             return 0;
         }
 
+        // 获取密码卡session
+        SESSION_LINK *link;
+        r = getSessionLink(&link);
+        if (r)
+        {
+            printf("ENGINE -> ec_pkey_verify: get sdf session fail, ret[%x]\n", r);
+            return 0;
+        }
         // 验证签名
-        // r = flk_SDF_ExtVerify_ECC(&publicKey, tbs, tbslen, &signature);
+        r = SDF_ExternalVerify_ECC(link->sessionHandle, SGD_SM2_1, &publicKey, tbs, tbslen, &signature);
         //    r = flk_SDF_IntVerify_ECC(GUOXIN_SDF_KEY_INDEX, tbs, tbslen, &signature);
         if (r)
         {
@@ -202,16 +228,18 @@ extern "C"
     static int ec_pkey_encrypt(EVP_PKEY_CTX *ctx, uint8_t *out,
                                size_t *outlen, const uint8_t *in, size_t inlen)
     {
+        printf("ENGINE -> ec_pkey_encrypt\n");
         return 0;
     }
 
     static int ec_pkey_decrypt(EVP_PKEY_CTX *ctx, uint8_t *out,
                                size_t *outlen, const uint8_t *in, size_t inlen)
     {
+        printf("ENGINE -> ec_pkey_decrypt\n");
         return 0;
     }
 
-    static int gmssl_engine_pkey_ctrl(EVP_PKEY_CTX *ctx, int type, int p1, void *p2)
+    static int ec_pkey_ctrl(EVP_PKEY_CTX *ctx, int type, int p1, void *p2)
     {
         pkey_ctrl_func default_ctrl;
         pkey_ctrl_str_func default_ctrl_str;
@@ -222,7 +250,7 @@ extern "C"
         return (*default_ctrl)(ctx, type, p1, p2);
     }
 
-    static int gmssl_engine_pkey_derive(EVP_PKEY_CTX *ctx, uint8_t *key, size_t *keylen)
+    static int ec_pkey_derive(EVP_PKEY_CTX *ctx, uint8_t *key, size_t *keylen)
     {
         pkey_derive_func default_derive;
         pkey_derive_init_func default_derive_init;
@@ -233,27 +261,35 @@ extern "C"
         return (*default_derive)(ctx, key, keylen);
     }
 
+    typedef struct _pkey_info
+    {
+        EVP_PKEY_METHOD *pMethod;
+    } pkey_info_t;
+
 #define PKEY_NID_NUM 1
-    static EVP_PKEY_METHOD *pMethod = NULL;
-    // static pkey_info_t info[PKEY_NID_NUM];
+    // static EVP_PKEY_METHOD *pMethod = NULL;
+    static pkey_info_t info[PKEY_NID_NUM];
     static EVP_PKEY_METHOD *pkey_ec_method(void)
     {
-        if ((pMethod = EVP_PKEY_meth_new(EVP_PKEY_EC, 0)) == NULL)
+        if ((info[0].pMethod = EVP_PKEY_meth_new(EVP_PKEY_EC, 0)) == NULL)
+        {
+            printf("ENGINE -> pkey_ec_method: EVP_PKEY_meth_new fail\n");
             return NULL;
+        }
 
-        EVP_PKEY_meth_set_init(pMethod, ec_pkey_init);
-        EVP_PKEY_meth_set_copy(pMethod, ec_pkey_copy);
-        EVP_PKEY_meth_set_cleanup(pMethod, ec_pkey_cleanup);
-        EVP_PKEY_meth_set_paramgen(pMethod, NULL, ec_pkey_paramgen);
-        EVP_PKEY_meth_set_keygen(pMethod, NULL, ec_pkey_keygen);
-        EVP_PKEY_meth_set_sign(pMethod, NULL, ec_pkey_sign);
-        EVP_PKEY_meth_set_verify(pMethod, NULL, ec_pkey_verify);
-        // EVP_PKEY_meth_set_encrypt(pMethod, NULL, gmssl_engine_pkey_encrypt);
-        // EVP_PKEY_meth_set_decrypt(pMethod, NULL, gmssl_engine_pkey_decrypt);
-        EVP_PKEY_meth_set_derive(pMethod, NULL, gmssl_engine_pkey_derive);
-        EVP_PKEY_meth_set_ctrl(pMethod, gmssl_engine_pkey_ctrl, NULL);
+        EVP_PKEY_meth_set_init(info[0].pMethod, ec_pkey_init);
+        EVP_PKEY_meth_set_copy(info[0].pMethod, ec_pkey_copy);
+        EVP_PKEY_meth_set_cleanup(info[0].pMethod, ec_pkey_cleanup);
+        EVP_PKEY_meth_set_paramgen(info[0].pMethod, NULL, ec_pkey_paramgen);
+        EVP_PKEY_meth_set_keygen(info[0].pMethod, NULL, ec_pkey_keygen);
+        EVP_PKEY_meth_set_sign(info[0].pMethod, sdf_ec_pkey_sign_init, sdf_ec_pkey_sign);
+        EVP_PKEY_meth_set_verify(info[0].pMethod, NULL, ec_pkey_verify);
+        EVP_PKEY_meth_set_encrypt(info[0].pMethod, NULL, ec_pkey_encrypt);
+        EVP_PKEY_meth_set_decrypt(info[0].pMethod, NULL, ec_pkey_decrypt);
+        EVP_PKEY_meth_set_derive(info[0].pMethod, NULL, ec_pkey_derive);
+        EVP_PKEY_meth_set_ctrl(info[0].pMethod, ec_pkey_ctrl, NULL);
 
-        return pMethod;
+        return info[0].pMethod;
     }
 
     static int pkey_nids[] = {

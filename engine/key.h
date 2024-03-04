@@ -2,7 +2,7 @@
  * @Author: lw liuwei@flksec.com
  * @Date: 2024-02-06 16:22:30
  * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2024-02-20 21:57:35
+ * @LastEditTime: 2024-03-02 21:41:42
  * @FilePath: \sslvpn-test\engine\cache.h
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -32,6 +32,8 @@ extern "C"
 
     int sdfSessionInit();
     int sdfSessionDestory();
+
+    int getSessionLink(SESSION_LINK **link);
 
     extern KEY_LINK *keyLink;
     int getKeyLink(KEY_LINK **link, unsigned char *key);

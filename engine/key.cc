@@ -2,7 +2,7 @@
  * @Author: lw liuwei@flksec.com
  * @Date: 2024-02-06 16:20:35
  * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2024-02-21 09:22:07
+ * @LastEditTime: 2024-03-02 21:57:26
  * @FilePath: \sslvpn-test\engine\sdfcache.cc
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -116,6 +116,42 @@ extern "C"
         return 0;
     }
 
+    int getSessionLink(SESSION_LINK **link)
+    {
+        int threadId = pthread_self();
+
+        // 查询session
+        SESSION_LINK *temp = sessionLink;
+        while (temp)
+        {
+            if (threadId == temp->threadid)
+            {
+                break;
+            }
+            temp = temp->next;
+        }
+        if (!temp)
+        {
+            printf("initKeyLink -> create new sdf session, threadid: %d\n", threadId);
+            temp = (SESSION_LINK *)calloc(1, sizeof(SESSION_LINK));
+            if (!temp)
+            {
+                return -1;
+            }
+            if (initSessionLink(temp, threadId))
+            {
+                printf("initKeyLink -> init sdf session fail, threadid: %d\n", threadId);
+                return -1;
+            }
+            pthread_mutex_lock(&gMutex); // 加锁
+            temp->next = sessionLink->next;
+            sessionLink->next = temp;
+            pthread_mutex_unlock(&gMutex); // 解锁
+        }
+        *link = temp;
+        return 0;
+    }
+
     static int initKeyLink(KEY_LINK *link, unsigned char *key, int threadId)
     {
         printf("initKeyLink -> threadId: %d\n", threadId);
@@ -128,31 +164,37 @@ extern "C"
         if (key)
         {
             // 查询session
-            SESSION_LINK *temp = sessionLink;
-            while (temp)
+            // SESSION_LINK *temp = sessionLink;
+            // while (temp)
+            // {
+            //     if (threadId == temp->threadid)
+            //     {
+            //         break;
+            //     }
+            //     temp = temp->next;
+            // }
+            // if (!temp)
+            // {
+            //     printf("initKeyLink -> not find session, threadid: %d\n", threadId);
+            //     temp = (SESSION_LINK *)calloc(1, sizeof(SESSION_LINK));
+            //     if (!temp)
+            //     {
+            //         return -1;
+            //     }
+            //     if (initSessionLink(temp, threadId))
+            //     {
+            //         return -1;
+            //     }
+            //     pthread_mutex_lock(&gMutex); // 加锁
+            //     temp->next = sessionLink->next;
+            //     sessionLink->next = temp;
+            //     pthread_mutex_unlock(&gMutex); // 解锁
+            // }
+
+            SESSION_LINK *temp = NULL;
+            if (getSessionLink(&temp) != 0)
             {
-                if (threadId == temp->threadid)
-                {
-                    break;
-                }
-                temp = temp->next;
-            }
-            if (!temp)
-            {
-                printf("initKeyLink -> not find session, threadid: %d\n", threadId);
-                temp = (SESSION_LINK *)calloc(1, sizeof(SESSION_LINK));
-                if (!temp)
-                {
-                    return -1;
-                }
-                if (initSessionLink(temp, threadId))
-                {
-                    return -1;
-                }
-                pthread_mutex_lock(&gMutex); // 加锁
-                temp->next = sessionLink->next;
-                sessionLink->next = temp;
-                pthread_mutex_unlock(&gMutex); // 解锁
+                return -1;
             }
             link->session = temp;
 
