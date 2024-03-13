@@ -66,12 +66,12 @@ extern "C"
         if (key_ctx->enc)
         {
             // r = SDF_Encrypt(sessionHandle, keyHandle, SGD_SMS4_CBC, iv, in, inl, out, &outl);
-            r = SDF_Encrypt(keyLink->session->sessionHandle, keyLink->keyHandle, SGD_SMS4_CBC, iv, in, inl, out, &outl);
+            r = SDF_Encrypt(keyLink->session->sessionHandle, keyLink->keyHandle, SGD_SMS4_CBC, iv, (unsigned char *)in, inl, out, &outl);
         }
         else
         {
             // r = SDF_Decrypt(sessionHandle, keyHandle, SGD_SMS4_CBC, iv, in, inl, out, &outl);
-            r = SDF_Decrypt(keyLink->session->sessionHandle, keyLink->keyHandle, SGD_SMS4_CBC, iv, in, inl, out, &outl);
+            r = SDF_Decrypt(keyLink->session->sessionHandle, keyLink->keyHandle, SGD_SMS4_CBC, iv, (unsigned char *)in, inl, out, &outl);
         }
         if (r)
         {

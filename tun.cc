@@ -1,8 +1,8 @@
 /*
  * @Author: lw liuwei@flksec.com
  * @Date: 2023-09-16 22:40:00
- * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2024-02-05 14:34:57
+ * @LastEditors: liuwei lyy9645@163.com
+ * @LastEditTime: 2024-03-13 17:59:21
  * @FilePath: \sslvpn-test\tun.cc
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -15,8 +15,16 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#ifdef __linux__
 #include <linux/if.h>
 #include <linux/if_tun.h>
+#elif __APPLE__
+#include <net/if_utun.h>
+#include <sys/kern_control.h>
+#include <sys/sys_domain.h>
+#elif _WIN32
+#else
+#endif
 #include <unistd.h>
 
 #include "tun.h"
@@ -25,6 +33,44 @@
 extern "C"
 {
 #endif
+
+#ifdef __APPLE__
+
+    int utun_num(const char *dev)
+    {
+        char num[16] = {0};
+        int i, j = 0;
+        int len = 0;
+        int v = 0;
+
+        if (!dev)
+        {
+            return v;
+        }
+        len = strlen(dev);
+        for (i = 0; i < len; i++)
+        {
+            if (dev[i] >= '0' && dev[i] <= '9')
+            {
+                num[j] = dev[i];
+                j++;
+                continue;
+            }
+        }
+
+        v = atoi(num);
+        if (v < 0)
+        {
+            v = 0;
+        }
+        else if (v > UINT8_MAX)
+        {
+            v = UINT8_MAX;
+        }
+        return v;
+    }
+#endif
+
     /**
      * @brief 配置虚拟网卡
      *
@@ -40,6 +86,8 @@ extern "C"
 
         printf("tun config -> global: %d dev: %s, mtu: %d, ipv4: %s, ipv4_net: %s, ipv6: %s\n", tunCfg->global,
                tunCfg->dev, tunCfg->mtu, tunCfg->ipv4, tunCfg->ipv4_net, tunCfg->ipv6);
+
+#ifdef __linux__
 
         // 设置mtu
         memset(buf, 0, sizeof(buf));
@@ -89,10 +137,37 @@ extern "C"
             system(buf);
         }
         return 0;
+#elif __APPLE__
+        // 设置mtu
+        memset(buf, 0, sizeof(buf));
+        snprintf(buf, sizeof(buf), "ifconfig %s mtu %d > /dev/null 2>&1", tunCfg->dev, tunCfg->mtu);
+        int status = system(buf);
+
+        // 设置ipv4地址
+        if (strlen(tunCfg->ipv4) > 0)
+        {
+            memset(buf, 0, sizeof(buf));
+            sprintf(buf, "ifconfig %s inet %s %s up", tunCfg->dev, tunCfg->ipv4, tunCfg->gateway);
+            printf("shell run: %s\n", buf);
+            system(buf);
+        }
+        // TODO 设置ipv6地址
+
+        // 设置mtu
+        memset(buf, 0, sizeof(buf));
+        sprintf(buf, "networksetup -setMTU %s mtu %d", tunCfg->dev, tunCfg->mtu);
+        system(buf);
+
+#elif _WIN32
+        return -1;
+#else
+        return -1;
+#endif
     }
 
     int tun_create_mq(TUNCONFIG_T *tunCfg, int queues, int *fds)
     {
+#ifdef __linux__
         struct ifreq ifr;
         int fd, err, i;
 
@@ -137,10 +212,18 @@ extern "C"
             close(fds[i]);
         }
         return err;
+#elif __APPLE__
+
+#elif _WIN32
+        return -1;
+#else
+        return -1;
+#endif
     }
 
     int tun_set_queue(int fd, int enable)
     {
+#ifdef __linux__
         struct ifreq ifr;
 
         memset(&ifr, 0, sizeof(ifr));
@@ -151,10 +234,18 @@ extern "C"
             ifr.ifr_flags = IFF_DETACH_QUEUE;
 
         return ioctl(fd, TUNSETQUEUE, (void *)&ifr);
+#elif __APPLE__
+
+#elif _WIN32
+        return -1;
+#else
+        return -1;
+#endif
     }
 
     int tun_create(TUNCONFIG_T *tunCfg)
     {
+#ifdef __linux__
         int flags = IFF_TUN | IFF_NO_PI;
         struct ifreq ifr;
         int fd, err;
@@ -192,6 +283,55 @@ extern "C"
             printf("config tun fail");
         }
         return fd;
+#elif __APPLE__
+        struct sockaddr_ctl sc = {0};
+        struct ctl_info ctlInfo = {0};
+        int fd;
+        int num = 0;
+
+        num = utun_num(tunCfg->dev);
+
+        if (strlcpy(ctlInfo.ctl_name, UTUN_CONTROL_NAME, sizeof(ctlInfo.ctl_name)) >= sizeof(ctlInfo.ctl_name))
+        {
+            perror("UTUN_CONTROL_NAME too long");
+            return -1;
+        }
+
+        if ((fd = socket(PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL)) == -1)
+        {
+            perror("socket(SYSPROTO_CONTROL)");
+            return -1;
+        }
+
+        if (ioctl(fd, CTLIOCGINFO, &ctlInfo) == -1)
+        {
+            perror("ioctl(CTLIOCGINFO");
+            close(fd);
+            return -1;
+        }
+
+        sc.sc_id = ctlInfo.ctl_id;
+        sc.sc_len = sizeof(sc);
+        sc.sc_family = AF_SYSTEM;
+        sc.ss_sysaddr = AF_SYS_CONTROL;
+        sc.sc_unit = num + 1; // just a example
+
+        if (connect(fd, (struct sockaddr *)&sc, sizeof(sc)) == -1)
+        {
+            perror("connect(AF_SYS_CONTROL");
+            close(fd);
+            return -1;
+        }
+        if (config_tun(tunCfg))
+        {
+            printf("macos config utun fail\n");
+        }
+        return fd;
+#elif _WIN32
+        return -1;
+#else
+        return -1;
+#endif
     }
 
 #ifdef __cplusplus

@@ -10,7 +10,7 @@ extern "C"
 
     typedef int (*pkey_init_func)(EVP_PKEY_CTX *);
 
-    typedef int (*pkey_copy_func)(EVP_PKEY_CTX *, EVP_PKEY_CTX *);
+    typedef int (*pkey_copy_func)(EVP_PKEY_CTX *, const EVP_PKEY_CTX *);
 
     typedef int (*pkey_paramgen_init_func)(EVP_PKEY_CTX *ctx);
 
