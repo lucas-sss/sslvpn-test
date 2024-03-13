@@ -1,8 +1,8 @@
 /*
  * @Author: lw liuwei@flksec.com
  * @Date: 2023-09-12 22:34:17
- * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2023-10-21 10:25:56
+ * @LastEditors: liuwei lyy9645@163.com
+ * @LastEditTime: 2024-03-13 17:24:33
  * @FilePath: \openssl-example\tun.h
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -25,7 +25,8 @@ extern "C"
     typedef struct
     {
         char dev[MAX_TUN_DEV_NAME_LEN];          // 虚拟设备名称
-        char ipv4[MAX_IPV4_STR_LEN + 1];         // ipv4地址    10.9.0.1
+        char gateway[MAX_IPV4_STR_LEN + 1];      // 网关地址（服务端虚拟ip）    10.9.0.1
+        char ipv4[MAX_IPV4_STR_LEN + 1];         // ipv4地址    10.9.0.2
         char ipv4_net[MAX_IPV4_NET_STR_LEN + 1]; // ipv4网络地址 10.9.0.0/24
         char ipv6[MAX_IPV6_STR_LEN + 1];         // ipv6地址
         unsigned int mtu;                        // 虚拟设备mtu值

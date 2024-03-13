@@ -1,8 +1,8 @@
 /*
  * @Author: lw liuwei@flksec.com
  * @Date: 2024-02-14 22:30:41
- * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2024-03-02 22:52:44
+ * @LastEditors: liuwei lyy9645@163.com
+ * @LastEditTime: 2024-03-13 22:54:39
  * @FilePath: \sslvpn-test\engine\sm2.cc
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -26,17 +26,17 @@ extern "C"
     {
         printf("ENGINE -> ec_pkey_init\n");
         pkey_init_func default_init;
-        EVP_PKEY_METHOD *pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
+        const EVP_PKEY_METHOD *pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
         EVP_PKEY_meth_get_init(pmeth, &default_init);
 
         return (*default_init)(ctx);
     }
 
-    static int ec_pkey_copy(EVP_PKEY_CTX *dst, EVP_PKEY_CTX *src)
+    static int ec_pkey_copy(EVP_PKEY_CTX *dst, const EVP_PKEY_CTX *src)
     {
         printf("ENGINE -> ec_pkey_copy\n");
         pkey_copy_func default_copy;
-        EVP_PKEY_METHOD *pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
+        const EVP_PKEY_METHOD *pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
         EVP_PKEY_meth_get_copy(pmeth, &default_copy);
 
         return (*default_copy)(dst, src);
@@ -46,7 +46,7 @@ extern "C"
     {
         printf("ENGINE -> ec_pkey_cleanup\n");
         pkey_cleanup_func default_cleanup;
-        EVP_PKEY_METHOD *pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
+        const EVP_PKEY_METHOD *pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
         EVP_PKEY_meth_get_cleanup(pmeth, &default_cleanup);
 
         (*default_cleanup)(ctx);
@@ -58,7 +58,7 @@ extern "C"
         pkey_paramgen_init_func default_paramgen_init;
         pkey_paramgen_func default_paramgen;
 
-        EVP_PKEY_METHOD *pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
+        const EVP_PKEY_METHOD *pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
         EVP_PKEY_meth_get_paramgen(pmeth, &default_paramgen_init, &default_paramgen);
 
         return (*default_paramgen)(ctx, pkey);
@@ -70,7 +70,7 @@ extern "C"
         pkey_keygen_init_func default_keygen_init;
         pkey_keygen_func default_keygen;
 
-        EVP_PKEY_METHOD *pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
+        const EVP_PKEY_METHOD *pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
         EVP_PKEY_meth_get_keygen(pmeth, &default_keygen_init, &default_keygen);
 
         return (*default_keygen)(ctx, pkey);
@@ -96,7 +96,7 @@ extern "C"
         memset(&signature, 0, sizeof(ECCSignature));
 
         // 提取私钥
-        EC_KEY *ec_key = EVP_PKEY_get0_EC_KEY(EVP_PKEY_CTX_get0_pkey(ctx));
+        EC_KEY *ec_key = (EC_KEY *)EVP_PKEY_get0_EC_KEY(EVP_PKEY_CTX_get0_pkey(ctx));
         if (!EC_KEY_check_key(ec_key))
         {
             printf("ENGINE -> sdf_ec_pkey_sign: EC_KEY_check_key failed\n");
@@ -116,7 +116,7 @@ extern "C"
             printf("ENGINE -> sdf_ec_pkey_sign: get sdf session fail, ret[%x]\n", r);
             return 0;
         }
-        r = SDF_ExternalSign_ECC(link->sessionHandle, SGD_SM2_1, &privateKey, tbs, tbslen, &signature);
+        r = SDF_ExternalSign_ECC(link->sessionHandle, SGD_SM2_1, &privateKey, (unsigned char *)tbs, tbslen, &signature);
         // r = flk_SDF_IntSign_ECC(GUOXIN_SDF_KEY_INDEX, tbs, tbslen, &signature);
         if (r)
         {
@@ -137,7 +137,7 @@ extern "C"
     pkey_sign_func default_sign;
     pkey_sign_func_init default_sign_init;
 
-    EVP_PKEY_METHOD *pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
+    const EVP_PKEY_METHOD *pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
     EVP_PKEY_meth_get_sign(pmeth, &default_sign_init, &default_sign);
     return (*default_sign)(ctx, sig, siglen, tbs, tbslen);
 #endif
@@ -179,7 +179,7 @@ extern "C"
         }
 
         // 提取公钥
-        ec_key = EVP_PKEY_get0_EC_KEY(EVP_PKEY_CTX_get0_pkey(ctx));
+        ec_key = (EC_KEY *)EVP_PKEY_get0_EC_KEY(EVP_PKEY_CTX_get0_pkey(ctx));
         if (!EC_KEY_check_key(ec_key))
         {
             printf("ENGINE -> ec_pkey_verify: EC_KEY_check_key failed\n");
@@ -207,7 +207,7 @@ extern "C"
             return 0;
         }
         // 验证签名
-        r = SDF_ExternalVerify_ECC(link->sessionHandle, SGD_SM2_1, &publicKey, tbs, tbslen, &signature);
+        r = SDF_ExternalVerify_ECC(link->sessionHandle, SGD_SM2_1, &publicKey, (unsigned char *)tbs, tbslen, &signature);
         //    r = flk_SDF_IntVerify_ECC(GUOXIN_SDF_KEY_INDEX, tbs, tbslen, &signature);
         if (r)
         {
@@ -219,7 +219,7 @@ extern "C"
     pkey_verify_func default_verify;
     pkey_verify_init_func default_verify_init;
 
-    EVP_PKEY_METHOD *pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
+    const EVP_PKEY_METHOD *pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
     EVP_PKEY_meth_get_verify(pmeth, &default_verify_init, &default_verify);
     return (*default_verify)(ctx, sig, siglen, tbs, tbslen);
 #endif
@@ -244,7 +244,7 @@ extern "C"
         pkey_ctrl_func default_ctrl;
         pkey_ctrl_str_func default_ctrl_str;
 
-        EVP_PKEY_METHOD *pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
+        const EVP_PKEY_METHOD *pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
         EVP_PKEY_meth_get_ctrl(pmeth, &default_ctrl, &default_ctrl_str);
 
         return (*default_ctrl)(ctx, type, p1, p2);
@@ -255,7 +255,7 @@ extern "C"
         pkey_derive_func default_derive;
         pkey_derive_init_func default_derive_init;
 
-        EVP_PKEY_METHOD *pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
+        const EVP_PKEY_METHOD *pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
         EVP_PKEY_meth_get_derive(pmeth, &default_derive_init, &default_derive);
 
         return (*default_derive)(ctx, key, keylen);

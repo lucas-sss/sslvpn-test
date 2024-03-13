@@ -1,8 +1,8 @@
 /*
  * @Author: lw liuwei@flksec.com
  * @Date: 2024-03-02 22:30:42
- * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2024-03-02 22:48:53
+ * @LastEditors: liuwei lyy9645@163.com
+ * @LastEditTime: 2024-03-13 23:02:51
  * @FilePath: \sslvpn-test\engine\random.c
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -24,7 +24,7 @@ extern "C"
 {
 #endif
 
-    static int rand_seed(const unsigned char *s, int num)
+    static int rand_seed(const void *s, int num)
     {
         return 1;
     }
@@ -39,6 +39,7 @@ extern "C"
         {
             return 0;
         }
+#ifndef NO_SDF
         // 获取密码卡session
         SESSION_LINK *link;
         r = getSessionLink(&link);
@@ -54,7 +55,14 @@ extern "C"
             printf("ENGINE -> sdf_random_bytes: flk_SDF_GenerateRandom failed, r[%x]\n", r);
             return 0;
         }
-
+#else
+        srand(time(NULL)); // 使用当前时间作为随机数种子
+        // 生成16个随机无符号字符
+        for (int i = 0; i < num; i++)
+        {
+            buf[i] = (unsigned char)(rand() % 256); // 生成0到255之间的随机数作为无符号字符
+        }
+#endif
         return 1;
     }
 
@@ -63,9 +71,9 @@ extern "C"
         return 1;
     }
 
-    static int random_cleanup(void)
+    static void random_cleanup(void)
     {
-        return 1;
+        // return 1;
     }
 
     const RAND_METHOD sdfRandMethod = {
