@@ -70,13 +70,19 @@ extern "C"
         char buf[512] = {0};
 
         memset(buf, 0, sizeof(buf));
+#ifdef __linux__
         sprintf(buf, "route del -net %s dev %s", route, tunCfg.dev);
+#elif __APPLE__
+        sprintf(buf, "route -v delete -net %s -interface %s", route, tunCfg.dev);
+#else
+#endif
         printf("删除路由: %s\n", buf);
         system(buf);
     }
 
     void releasePushRoute()
     {
+        delRoute(tunCfg.ipv4_net);
         if (route4Count == 0)
         {
             return;
@@ -292,7 +298,7 @@ extern "C"
             if (g_stop)
             {
                 printf("used Ctrl+C stop.\n");
-                exit(0);
+                goto exit;
             }
             printf("SSL_connect fail, retry after 3 sesond\n");
             sleep(3); // 睡眠3秒
@@ -407,8 +413,12 @@ extern "C"
         // 如果时全局代理，删除指定路由
         if (tunCfg.global)
         {
+#ifdef __APPLE__
+
+#elif __linux__
             delRoute("0.0.0.0/1");
             delRoute("128.0.0.0/1");
+#endif
         }
     finish:
         /* 关闭连接 */
@@ -477,7 +487,12 @@ extern "C"
     {
         char buf[512] = {0};
         memset(buf, 0, sizeof(buf));
+#ifdef __APPLE__
+        sprintf(buf, "route add -net %s -interface %s", route, tunCfg.dev);
+#elif __linux__
         sprintf(buf, "route add -net %s dev %s", route, tunCfg.dev);
+#else
+#endif
         printf("添加路由: %s\n", buf);
         system(buf);
     }
@@ -544,6 +559,9 @@ extern "C"
         pthread_t clientTunThread;
 
         memset(&tunCfg, 0, sizeof(TUNCONFIG_T));
+#ifdef __APPLE__
+        memcpy(tunCfg.dev, "utun61", strlen("utun61"));
+#endif
         tunCfg.global = global;
         tunCfg.mtu = mtu;
         memcpy(tunCfg.gateway, svip, strlen(svip));

@@ -2,7 +2,7 @@
  * @Author: lw liuwei@flksec.com
  * @Date: 2023-09-16 22:40:00
  * @LastEditors: liuwei lyy9645@163.com
- * @LastEditTime: 2024-03-13 17:59:21
+ * @LastEditTime: 2024-03-14 12:17:03
  * @FilePath: \sslvpn-test\tun.cc
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -88,7 +88,6 @@ extern "C"
                tunCfg->dev, tunCfg->mtu, tunCfg->ipv4, tunCfg->ipv4_net, tunCfg->ipv6);
 
 #ifdef __linux__
-
         // 设置mtu
         memset(buf, 0, sizeof(buf));
         sprintf(buf, "ip link set dev %s mtu %d", tunCfg->dev, tunCfg->mtu);
@@ -138,15 +137,11 @@ extern "C"
         }
         return 0;
 #elif __APPLE__
-        // 设置mtu
-        memset(buf, 0, sizeof(buf));
-        snprintf(buf, sizeof(buf), "ifconfig %s mtu %d > /dev/null 2>&1", tunCfg->dev, tunCfg->mtu);
-        int status = system(buf);
-
         // 设置ipv4地址
         if (strlen(tunCfg->ipv4) > 0)
         {
             memset(buf, 0, sizeof(buf));
+            // "ifconfig %s inet %s %s netmask %s up"
             sprintf(buf, "ifconfig %s inet %s %s up", tunCfg->dev, tunCfg->ipv4, tunCfg->gateway);
             printf("shell run: %s\n", buf);
             system(buf);
@@ -154,10 +149,30 @@ extern "C"
         // TODO 设置ipv6地址
 
         // 设置mtu
+        // memset(buf, 0, sizeof(buf));
+        // sprintf(buf, "networksetup -setMTU %s mtu %d", tunCfg->dev, tunCfg->mtu);
+        // printf("shell run: %s\n", buf);
+        // system(buf);
+
+        // 设置路由
         memset(buf, 0, sizeof(buf));
-        sprintf(buf, "networksetup -setMTU %s mtu %d", tunCfg->dev, tunCfg->mtu);
+        sprintf(buf, "route add -net %s -interface %s", tunCfg->ipv4_net, tunCfg->dev);
+        printf("shell run: %s\n", buf);
         system(buf);
 
+        // // 设置了全局代理
+        // if (tunCfg->global)
+        // {
+        //     memset(buf, 0, sizeof(buf));
+        //     sprintf(buf, "route add -net 0.0.0.0/1 dev %s", tunCfg->dev);
+        //     printf("shell run: %s\n", buf);
+        //     system(buf);
+        //     memset(buf, 0, sizeof(buf));
+        //     sprintf(buf, "route add -net 128.0.0.0/1 dev %s", tunCfg->dev);
+        //     printf("shell run: %s\n", buf);
+        //     system(buf);
+        // }
+        return 0;
 #elif _WIN32
         return -1;
 #else
