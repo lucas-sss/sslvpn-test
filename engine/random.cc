@@ -17,7 +17,7 @@
 
 #include "random.h"
 #include "sdf.h"
-#include "key.h"
+#include "sdf_handler.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -56,12 +56,12 @@ extern "C"
             return 0;
         }
 #else
-        srand(time(NULL)); // 使用当前时间作为随机数种子
-        // 生成16个随机无符号字符
-        for (int i = 0; i < num; i++)
-        {
-            buf[i] = (unsigned char)(rand() % 256); // 生成0到255之间的随机数作为无符号字符
-        }
+    srand(time(NULL)); // 使用当前时间作为随机数种子
+    // 生成16个随机无符号字符
+    for (int i = 0; i < num; i++)
+    {
+        buf[i] = (unsigned char)(rand() % 256); // 生成0到255之间的随机数作为无符号字符
+    }
 #endif
         return 1;
     }

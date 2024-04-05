@@ -8,7 +8,7 @@
 
 #include "sm4.h"
 #include "sdf.h"
-#include "key.h"
+#include "sdf_handler.h"
 #include "../print.h"
 
 #ifdef __cplusplus

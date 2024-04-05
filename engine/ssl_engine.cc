@@ -2,7 +2,7 @@
  * @Author: lw liuwei@flksec.com
  * @Date: 2024-02-05 14:34:28
  * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2024-03-02 22:48:05
+ * @LastEditTime: 2024-04-05 23:03:48
  * @FilePath: \sslvpn-test\engine\sslengine.cc
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -10,9 +10,10 @@
 #include <stdio.h>
 #include "random.h"
 #include "sm4.h"
+#include "sm3.h"
 #include "sm2.h"
 #include "ssl_engine.h"
-#include "key.h"
+#include "sdf_handler.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -56,6 +57,7 @@ extern "C"
         int ret = 1;
 
         ssl_engine_create_cipher();
+        ssl_engine_create_digest();
 
         ret &= ENGINE_set_id(e, engine_id);
         ret &= ENGINE_set_name(e, engine_name);
@@ -65,7 +67,8 @@ extern "C"
 
         // 设置sm4
         ret &= ENGINE_set_ciphers(e, ssl_engine_ciphers);
-        // TODO 设置sm3
+        // 设置sm3
+        ret &= ENGINE_set_digests(e, ssl_engine_digests);
         // 设置sm2
         ret &= ENGINE_set_pkey_meths(e, ssl_engine_ec_pkey);
 

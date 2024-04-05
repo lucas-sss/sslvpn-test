@@ -16,7 +16,7 @@
 #include "sdf_type.h"
 #include "ec_helper.h"
 #include "sdf.h"
-#include "key.h"
+#include "sdf_handler.h"
 
 #ifdef __cplusplus
 extern "C"
