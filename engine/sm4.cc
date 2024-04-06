@@ -134,14 +134,14 @@ extern "C"
     }
 
     static int ciphers_nids[] = {
-        NID_sm4_ecb,
         NID_sm4_cbc,
-        NID_sm4_ctr};
+        NID_sm4_ecb,
+        NID_sm4_ctr,
+    };
 
     static cipher_info_t info[] = {
-        // sm4
-        {NID_sm4_ecb, NULL},
         {NID_sm4_cbc, NULL},
+        {NID_sm4_ecb, NULL},
         {NID_sm4_ctr, NULL},
     };
 
@@ -149,11 +149,11 @@ extern "C"
     {
         switch (nid)
         {
-        case NID_sm4_ecb:
-            return EVP_sm4_ecb();
         case NID_sm4_cbc:
             // return EVP_sm4_cbc();
             return EVP_sm4_cbc_sdf();
+        case NID_sm4_ecb:
+            return EVP_sm4_ecb();
         case NID_sm4_ctr:
             return EVP_sm4_ctr();
         default:

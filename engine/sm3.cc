@@ -2,7 +2,7 @@
  * @Author: lw liuwei@flksec.com
  * @Date: 2024-04-05 20:41:49
  * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2024-04-05 23:50:51
+ * @LastEditTime: 2024-04-06 10:27:24
  * @FilePath: \sslvpn-test\engine\sm3.cc
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -44,7 +44,7 @@ extern "C"
     static int
     sdf_digest_init(EVP_MD_CTX *ctx)
     {
-        printf("ENGINE -> sdf_digest_init\n");
+        // printf("ENGINE -> sdf_digest_init\n");
         if (!ctx || !EVP_MD_CTX_md_data(ctx))
         {
             return 0;
@@ -57,7 +57,7 @@ extern "C"
 
     static int sdf_digest_update(EVP_MD_CTX *ctx, const void *data, size_t count)
     {
-        printf("ENGINE -> sdf_digest_update, count: %d\n", count);
+        // printf("ENGINE -> sdf_digest_update, count: %d\n", count);
         if (!ctx || !EVP_MD_CTX_md_data(ctx) || (!data && count != 0))
         {
             return 0;
@@ -75,7 +75,7 @@ extern "C"
 
     static int sdf_digest_final(EVP_MD_CTX *ctx, unsigned char *md)
     {
-        printf("ENGINE -> sdf_digest_final\n");
+        // printf("ENGINE -> sdf_digest_final\n");
         int r;
         unsigned int md_len = 0;
 
@@ -193,7 +193,7 @@ extern "C"
             return (sizeof(digestNids) / sizeof(digestNids[0]));
         }
         *digest = ssl_engine_get_digest(nid);
-        return 1;
+        return (*digest != NULL);
     }
 
 #ifdef __cplusplus

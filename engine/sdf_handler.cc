@@ -2,7 +2,7 @@
  * @Author: lw liuwei@flksec.com
  * @Date: 2024-02-06 16:20:35
  * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2024-04-05 22:09:43
+ * @LastEditTime: 2024-04-06 13:34:34
  * @FilePath: \sslvpn-test\engine\sdfcache.cc
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -23,8 +23,8 @@ extern "C"
     SESSION_LINK *sessionLink = NULL;
     KEY_LINK *keyLink = NULL;
 
-    static int initSessionLink(SESSION_LINK *link, int threadId);
-    static int initKeyLink(KEY_LINK *link, unsigned char *key, int threadId);
+    static int initSessionLink(SESSION_LINK *link, long threadId);
+    static int initKeyLink(KEY_LINK *link, unsigned char *key, long threadId);
 
 #ifndef NO_SDF
     int sdfSessionInit()
@@ -94,9 +94,9 @@ extern "C"
         printf("ENGINE -> sdfSessionDestory finish\n");
     }
 
-    static int initSessionLink(SESSION_LINK *link, int threadId)
+    static int initSessionLink(SESSION_LINK *link, long threadId)
     {
-        printf("initSessionLink -> threadId: %d\n", threadId);
+        printf("initSessionLink -> threadId: %ld\n", threadId);
         link->next = NULL;
         link->devHandle = NULL;
         link->sessionHandle = NULL;
@@ -139,7 +139,7 @@ extern "C"
         }
         if (!temp)
         {
-            printf("initKeyLink -> create new sdf session, threadid: %d\n", threadId);
+            printf("initKeyLink -> create new sdf session, threadid: %ld\n", threadId);
             temp = (SESSION_LINK *)calloc(1, sizeof(SESSION_LINK));
             if (!temp)
             {
@@ -159,9 +159,9 @@ extern "C"
         return 0;
     }
 
-    static int initKeyLink(KEY_LINK *link, unsigned char *key, int threadId)
+    static int initKeyLink(KEY_LINK *link, unsigned char *key, long threadId)
     {
-        printf("initKeyLink -> threadId: %d\n", threadId);
+        printf("initKeyLink -> threadId: %ld\n", threadId);
 
         int r;
 
@@ -195,9 +195,9 @@ extern "C"
 #ifdef __APPLE__
         int threadid = pthread_mach_thread_np(pthread_self());
 #else
-        int threadid = pthread_self();
+        long threadid = pthread_self();
 #endif
-        // printf("getKeyLink -> threadid: %d\n", threadid);
+        // printf("getKeyLink -> threadid: %ld\n", threadid);
 
         KEY_LINK *temp = keyLink->next;
         while (temp)
@@ -210,7 +210,7 @@ extern "C"
         }
         if (!temp)
         {
-            // printf("getKeyLink -> not find keyLink, threadid: %d\n", threadid);
+            // printf("getKeyLink -> not find keyLink, threadid: %ld\n", threadid);
             temp = (KEY_LINK *)calloc(1, sizeof(KEY_LINK));
             if (!temp)
             {
