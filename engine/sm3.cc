@@ -2,7 +2,7 @@
  * @Author: lw liuwei@flksec.com
  * @Date: 2024-04-05 20:41:49
  * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2024-04-06 10:27:24
+ * @LastEditTime: 2024-04-08 10:46:19
  * @FilePath: \sslvpn-test\engine\sm3.cc
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -45,6 +45,7 @@ extern "C"
     sdf_digest_init(EVP_MD_CTX *ctx)
     {
         // printf("ENGINE -> sdf_digest_init\n");
+#ifndef NO_SDF
         if (!ctx || !EVP_MD_CTX_md_data(ctx))
         {
             return 0;
@@ -53,11 +54,15 @@ extern "C"
         memset(sm3SdfCtx, 0, sizeof(EVP_SM3_SDF_CTX));
         sm3SdfCtx->num = 0;
         return 1;
+#else
+    return EVP_MD_meth_get_init(EVP_sm3())(ctx);
+#endif
     }
 
     static int sdf_digest_update(EVP_MD_CTX *ctx, const void *data, size_t count)
     {
         // printf("ENGINE -> sdf_digest_update, count: %d\n", count);
+#ifndef NO_SDF
         if (!ctx || !EVP_MD_CTX_md_data(ctx) || (!data && count != 0))
         {
             return 0;
@@ -71,11 +76,15 @@ extern "C"
         memcpy(sm3SdfCtx->buf + sm3SdfCtx->num, data, count);
         sm3SdfCtx->num += count;
         return 1;
+#else
+    return EVP_MD_meth_get_update(EVP_sm3())(ctx, data, count);
+#endif
     }
 
     static int sdf_digest_final(EVP_MD_CTX *ctx, unsigned char *md)
     {
         // printf("ENGINE -> sdf_digest_final\n");
+#ifndef NO_SDF
         int r;
         unsigned int md_len = 0;
 
@@ -86,7 +95,6 @@ extern "C"
 
         EVP_SM3_SDF_CTX *sm3SdfCtx = (EVP_SM3_SDF_CTX *)EVP_MD_CTX_md_data(ctx);
 
-#ifndef NO_SDF
         SESSION_LINK *sessionLink = NULL;
         r = getSessionLink(&sessionLink);
         if (r)
@@ -113,6 +121,7 @@ extern "C"
             return 0;
         }
 #else
+    return EVP_MD_meth_get_final(EVP_sm3())(ctx, md);
 #endif
         return 1;
     }
