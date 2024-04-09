@@ -2,7 +2,7 @@
  * @Author: lw liuwei@flksec.com
  * @Date: 2024-02-14 22:30:41
  * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2024-04-08 22:55:03
+ * @LastEditTime: 2024-04-09 00:24:19
  * @FilePath: \sslvpn-test\engine\sm2.cc
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -279,41 +279,16 @@ extern "C"
         EVP_PKEY_METHOD *pMethod;
     } pkey_info_t;
 
-#define PKEY_NID_NUM 1
-    // static EVP_PKEY_METHOD *pMethod = NULL;
-    static pkey_info_t info[PKEY_NID_NUM];
-
     static EVP_PKEY_METHOD *_hidden_evp_pkey_sdf = NULL;
+
     static EVP_PKEY_METHOD *pkey_ec_method(void)
     {
-        // const EVP_PKEY_METHOD *pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
-        // EVP_PKEY_meth_get_init(pmeth, &default_init);
-        // if (_hidden_evp_pkey_sdf == NULL && (_hidden_evp_pkey_sdf = EVP_PKEY_meth_new(EVP_PKEY_EC, 0)) == NULL ||
-        //     !EVP_PKEY_meth_set_init(info[0].pMethod, ec_pkey_init) ||
-        //     !EVP_PKEY_meth_set_copy(info[0].pMethod, ec_pkey_copy) ||
-        //     !EVP_PKEY_meth_set_cleanup(info[0].pMethod, ec_pkey_cleanup) ||
-        //     !EVP_PKEY_meth_set_paramgen(info[0].pMethod, NULL, ec_pkey_paramgen) ||
-        //     !EVP_PKEY_meth_set_keygen(info[0].pMethod, NULL, ec_pkey_keygen) ||
-        //     !EVP_PKEY_meth_set_sign(info[0].pMethod, sdf_ec_pkey_sign_init, sdf_ec_pkey_sign) ||
-        //     !EVP_PKEY_meth_set_verify(info[0].pMethod, NULL, ec_pkey_verify) ||
-        //     !EVP_PKEY_meth_set_encrypt(info[0].pMethod, NULL, ec_pkey_encrypt) ||
-        //     !EVP_PKEY_meth_set_decrypt(info[0].pMethod, NULL, ec_pkey_decrypt) ||
-        //     !EVP_PKEY_meth_set_derive(info[0].pMethod, NULL, ec_pkey_derive) ||
-        //     !EVP_PKEY_meth_set_ctrl(info[0].pMethod, ec_pkey_ctrl, NULL))
-        // {
-        //     printf("pkey_ec_method() -> error\n");
-        //     EVP_PKEY_meth_free(_hidden_evp_pkey_sdf);
-        //     _hidden_evp_pkey_sdf = NULL;
-        // }
-        // return _hidden_evp_pkey_sdf;
-
         int orig_id, orig_flags;
 
         orig_pmeth = EVP_PKEY_meth_find(EVP_PKEY_EC);
         EVP_PKEY_meth_get0_info(&orig_id, &orig_flags, orig_pmeth);
 
-        // if ((info[0].pMethod = EVP_PKEY_meth_new(EVP_PKEY_EC, 0)) == NULL)
-        if ((_hidden_evp_pkey_sdf = EVP_PKEY_meth_new(EVP_PKEY_EC, orig_flags)) == NULL)
+        if ((_hidden_evp_pkey_sdf = EVP_PKEY_meth_new(EVP_PKEY_EC, 0)) == NULL)
         {
             printf("ENGINE -> pkey_ec_method: EVP_PKEY_meth_new fail\n");
             return NULL;
@@ -322,8 +297,8 @@ extern "C"
         EVP_PKEY_meth_set_init(_hidden_evp_pkey_sdf, ec_pkey_init);
         EVP_PKEY_meth_set_copy(_hidden_evp_pkey_sdf, ec_pkey_copy);
         EVP_PKEY_meth_set_cleanup(_hidden_evp_pkey_sdf, ec_pkey_cleanup);
-        // EVP_PKEY_meth_set_paramgen(_hidden_evp_pkey_sdf, NULL, ec_pkey_paramgen);
-        // EVP_PKEY_meth_set_keygen(_hidden_evp_pkey_sdf, NULL, ec_pkey_keygen);
+        EVP_PKEY_meth_set_paramgen(_hidden_evp_pkey_sdf, NULL, ec_pkey_paramgen);
+        EVP_PKEY_meth_set_keygen(_hidden_evp_pkey_sdf, NULL, ec_pkey_keygen);
         EVP_PKEY_meth_set_sign(_hidden_evp_pkey_sdf, NULL, sdf_ec_pkey_sign);
         EVP_PKEY_meth_set_verify(_hidden_evp_pkey_sdf, NULL, ec_pkey_verify);
         EVP_PKEY_meth_set_encrypt(_hidden_evp_pkey_sdf, NULL, ec_pkey_encrypt);
@@ -331,19 +306,6 @@ extern "C"
         // EVP_PKEY_meth_set_derive(_hidden_evp_pkey_sdf, NULL, ec_pkey_derive);
         // EVP_PKEY_meth_set_ctrl(_hidden_evp_pkey_sdf, ec_pkey_ctrl, NULL);
         return _hidden_evp_pkey_sdf;
-
-        // EVP_PKEY_meth_set_init(info[0].pMethod, ec_pkey_init);
-        // EVP_PKEY_meth_set_copy(info[0].pMethod, ec_pkey_copy);
-        // EVP_PKEY_meth_set_cleanup(info[0].pMethod, ec_pkey_cleanup);
-        // EVP_PKEY_meth_set_paramgen(info[0].pMethod, NULL, ec_pkey_paramgen);
-        // EVP_PKEY_meth_set_keygen(info[0].pMethod, NULL, ec_pkey_keygen);
-        // EVP_PKEY_meth_set_sign(info[0].pMethod, sdf_ec_pkey_sign_init, sdf_ec_pkey_sign);
-        // EVP_PKEY_meth_set_verify(info[0].pMethod, NULL, ec_pkey_verify);
-        // EVP_PKEY_meth_set_encrypt(info[0].pMethod, NULL, ec_pkey_encrypt);
-        // EVP_PKEY_meth_set_decrypt(info[0].pMethod, NULL, ec_pkey_decrypt);
-        // EVP_PKEY_meth_set_derive(info[0].pMethod, NULL, ec_pkey_derive);
-        // EVP_PKEY_meth_set_ctrl(info[0].pMethod, ec_pkey_ctrl, NULL);
-        // return info[0].pMethod;
     }
 
     static int pkey_nids[] = {
@@ -362,6 +324,7 @@ extern "C"
 
         switch (nid)
         {
+        case EVP_PKEY_SM2:
         case EVP_PKEY_EC:
             *pmeth = pkey_ec_method();
             break;

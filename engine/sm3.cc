@@ -2,7 +2,7 @@
  * @Author: lw liuwei@flksec.com
  * @Date: 2024-04-05 20:41:49
  * @LastEditors: lw liuwei@flksec.com
- * @LastEditTime: 2024-04-08 10:46:19
+ * @LastEditTime: 2024-04-09 12:27:43
  * @FilePath: \sslvpn-test\engine\sm3.cc
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -120,10 +120,10 @@ extern "C"
             printf("ENGINE -> sdf_digest_final: SDF_HashFinal, ret: %x\n", r);
             return 0;
         }
+        return 1;
 #else
     return EVP_MD_meth_get_final(EVP_sm3())(ctx, md);
 #endif
-        return 1;
     }
 
     static EVP_MD *_hidden_sm3_sdf = NULL;
@@ -133,16 +133,13 @@ extern "C"
                                         !EVP_MD_meth_set_flags(_hidden_sm3_sdf, 16) ||
                                         !EVP_MD_meth_set_input_blocksize(_hidden_sm3_sdf, 64) ||
                                         !EVP_MD_meth_set_result_size(_hidden_sm3_sdf, 32) ||
-#ifndef NO_SDF
                                         !EVP_MD_meth_set_init(_hidden_sm3_sdf, sdf_digest_init) ||
                                         !EVP_MD_meth_set_update(_hidden_sm3_sdf, sdf_digest_update) ||
                                         !EVP_MD_meth_set_final(_hidden_sm3_sdf, sdf_digest_final) ||
+#ifndef NO_SDF
                                         !EVP_MD_meth_set_app_datasize(_hidden_sm3_sdf, sizeof(EVP_SM3_SDF_CTX))))
 #else
-                                        !EVP_MD_meth_set_init(_hidden_sm3_sdf, EVP_MD_meth_get_init(EVP_sm3())) ||
-                                        !EVP_MD_meth_set_update(_hidden_sm3_sdf, EVP_MD_meth_get_update(EVP_sm3())) ||
-                                        !EVP_MD_meth_set_final(_hidden_sm3_sdf, EVP_MD_meth_get_final(EVP_sm3())) ||
-                                        !EVP_MD_meth_set_app_datasize(_hidden_sm3_sdf, EVP_MD_meth_get_app_datasize(EVP_sm3()))) // 软算法
+                                    !EVP_MD_meth_set_app_datasize(_hidden_sm3_sdf, EVP_MD_meth_get_app_datasize(EVP_sm3())))) // 软算法
 #endif
 
         {
