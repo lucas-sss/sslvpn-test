@@ -309,6 +309,7 @@ extern "C"
     }
 
     static int pkey_nids[] = {
+        EVP_PKEY_SM2,
         EVP_PKEY_EC};
 
     int ssl_engine_ec_pkey(ENGINE *e, EVP_PKEY_METHOD **pmeth, const int **nids, int nid)

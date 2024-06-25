@@ -70,7 +70,7 @@ extern "C"
         // 设置sm3
         ret &= ENGINE_set_digests(e, ssl_engine_digests);
         // 设置sm2
-        ret &= ENGINE_set_pkey_meths(e, ssl_engine_ec_pkey);
+        // ret &= ENGINE_set_pkey_meths(e, ssl_engine_ec_pkey);
 
         ret &= ENGINE_set_destroy_function(e, engine_destroy);
         ret &= ENGINE_set_init_function(e, engine_init);

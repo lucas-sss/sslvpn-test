@@ -9,6 +9,9 @@
 #ifndef CACHE_H
 #define CACHE_H
 
+#define MAX_SDF_KEY_NUM 512
+#define MAX_SDF_KEY_SURVIVAL_TIME_SECOND 600
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -16,15 +19,22 @@ extern "C"
 
     typedef struct sessionlink_t
     {
+        volatile int expired;
         void *devHandle;
         void *sessionHandle;
         long threadid;
+        long useTime;
         struct sessionlink_t *next;
     } SESSION_LINK;
 
     typedef struct keylink_t
     {
-        SESSION_LINK *session;
+        // SESSION_LINK *session;
+        volatile int expired;
+        void *devHandle;
+        void *sessionHandle;
+        long threadid;
+        long useTime;
         void *keyHandle;
         unsigned char key[16];
         struct keylink_t *next;
