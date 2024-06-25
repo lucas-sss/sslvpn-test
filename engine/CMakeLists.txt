@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 2.8)
-project(engine CXX)
+project(flk_ssl_engine CXX)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_CXX_STANDARD 11)
@@ -38,7 +38,6 @@ ELSEIF (CMAKE_SYSTEM_NAME MATCHES "Darwin")
 ENDIF ()
 
 
-# macos暂时不编译服务端
 IF (NOT CMAKE_SYSTEM_NAME MATCHES "Darwin")
     add_library(flk_ssl_engine SHARED
         ec_helper.cc
